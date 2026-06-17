@@ -37,6 +37,9 @@ bm25_index.pkl
 # Dataset (私有数据集，不提交到 Git)
 veracier-industries/
 
+# Internal design docs (仅供本地参考，不上传)
+document/
+
 # Crash dumps
 *.stackdump
 
