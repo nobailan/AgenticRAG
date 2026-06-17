@@ -1,0 +1,237 @@
+Agentic RAG v0.3 — Gradio 可视化界面需求清单
+一、版本目标
+在 v0.2（核心引擎 + CLI + 端到端测试）的基础上，构建一个 Gradio Web 可视化交互界面，实现：
+
+图形化聊天问答
+
+实时推理轨迹流式展示（Agent 每步决策可见）
+
+检索文档来源预览
+
+核心参数可视化调节（Top-K / Temperature）
+
+一键生成公网演示链接（share=True）
+
+里程碑：运行 python app_gradio.py 后在浏览器打开 http://127.0.0.1:7860，输入问题能看见 Agent 逐步思考并输出答案。
+
+二、范围（做什么 & 不做什么）
+2.1 本次必须完成（v0.3 核心）
+✅ 新增 app_gradio.py 文件，实现 Gradio 界面
+
+✅ 修改 llm_client.py：增加 get_llm_response_stream() 流式调用函数
+
+✅ 修改 workflow.py：增加 run_workflow_streaming() 生成器函数，支持节点级回调
+
+✅ 修改 config.py：增加 STREAMING_ENABLED 开关（默认 True）
+
+✅ Gradio 界面包含：聊天框、推理轨迹面板、文档来源面板、参数调节滑块
+
+✅ 支持 share=True 生成公网临时链接
+
+2.2 明确不包含（v0.3 不做的）
+❌ MCP Server 集成（放到 v0.4）
+
+❌ 用户认证 / 多用户会话管理
+
+❌ 历史对话持久化（重启后清空）
+
+❌ Docker 部署
+
+❌ 暗黑模式 / 主题自定义（使用 Gradio 默认 Soft 主题即可）
+
+三、详细任务拆解（按优先级 P0）
+P0-1: 实现 LLM 流式调用（llm_client.py 修改）
+需求：
+
+在 llm_client.py 中新增 get_llm_response_stream(prompt, system_prompt=None, temperature=None, callback=None) 函数。
+
+该函数为生成器（yield），逐 token 返回 LLM 输出。
+
+支持 OpenAI 和 DeepSeek（兼容 OpenAI SDK）的 stream=True 参数。
+
+如果 callback 参数传入，每个 token 生成时立即调用 callback("generate", token)。
+
+异常处理：流式过程中若中断，抛出 RuntimeError。
+
+函数签名（必须严格一致）：
+
+python
+def get_llm_response_stream(
+    prompt: str,
+    system_prompt: Optional[str] = None,
+    temperature: Optional[float] = None,
+    callback: Optional[Callable[[str, str], None]] = None,
+) -> Generator[str, None, None]:
+    """
+    Yields:
+        逐 token 的响应文本
+    """
+验收标准：
+
+运行 python -c "from llm_client import get_llm_response_stream; for t in get_llm_response_stream('Say hello'): print(t, end='')" 能逐字输出 Hello。
+
+P0-2: 实现流式工作流包装器（workflow.py 修改）
+需求：
+
+在 workflow.py 中新增 run_workflow_streaming(question: str, config_override: dict = None) -> Generator 函数。
+
+内部调用原有的 run_workflow（或直接构建图），但在每个关键节点（classify_intent、retrieve、check_sufficiency、generate_answer）执行时，通过 yield 向外推送状态更新。
+
+每个 yield 的数据结构为 dict，包含：
+
+python
+{
+    "type": "node",          # 固定值
+    "node": "classify_intent",  # 节点名
+    "message": "正在判断问题意图...",  # 用户可读的中文/英文描述
+    "detail": "simple"       # 节点输出的关键结果（如 intent 值）
+}
+当 generate_answer 节点开始流式生成时，逐 token yield：
+
+python
+{
+    "type": "token",
+    "content": "Veracier",
+    "accumulated": "Veracier"  # 已累积的完整答案
+}
+工作流结束时，yield 最终状态：
+
+python
+{
+    "type": "done",
+    "final_answer": "...",
+    "retrieved_sources": ["doc_0", "doc_5"],
+    "reasoning_trace": [...]
+}
+验收标准：
+
+调用 list(run_workflow_streaming("What is Veracier?")) 返回的列表长度 ≥ 10（至少有 7 个节点事件 + 若干 token 事件）。
+
+最后一个事件 type == "done"。
+
+P0-3: 创建 Gradio 界面（app_gradio.py 新增文件）
+需求：
+
+使用 gradio.Blocks 构建左右两栏布局（或上下布局，推荐左右）。
+
+左栏（主交互区）：
+
+顶部显示标题："🏢 Agentic RAG 企业知识库 (Veracier Industries)"
+
+中间为 gr.Chatbot 组件（type="messages"，支持显示历史对话）。
+
+底部为 gr.Textbox（输入框）和 gr.Button("发送")。
+
+支持回车键发送（submit 事件绑定）。
+
+右栏（侧边信息面板）：
+
+上部分：gr.Textbox（标签："🧠 Agent 推理轨迹"，lines=15，只读），实时更新节点步骤。
+
+中部分：gr.Accordion("📄 检索来源", open=False)，内部为 gr.JSON 或 gr.Textbox，显示检索到的 chunk 列表（含文件名和片段）。
+
+下部分：gr.Accordion("⚙️ 参数调节", open=False)，包含：
+
+gr.Slider(1, 20, value=5, label="Top-K 检索数", step=1)
+
+gr.Slider(0.0, 1.0, value=0.0, label="Temperature", step=0.05)
+
+交互逻辑：
+
+用户点击发送或按回车 → 清空输入框 → 将用户消息添加到 Chatbot → 调用 run_workflow_streaming。
+
+对于每个 yield 事件：
+
+如果是 node 类型：更新右侧推理轨迹文本框（追加一行，例如 ✅ 意图分类: simple）。
+
+如果是 token 类型：流式追加到当前 Chatbot 的 AI 回复消息中。
+
+如果是 done 类型：完成当前回复，显示来源信息到右侧面板。
+
+如果参数滑块变化，下次请求时通过 config_override 传入（覆盖 config.TOP_K 和 config.LLM_TEMPERATURE）。
+
+UI 样式：
+
+使用 gr.themes.Soft()。
+
+设置 demo.queue() 支持并发。
+
+在 if __name__ == "__main__": 中执行 demo.launch(share=True, server_name="0.0.0.0")。
+
+验收标准：
+
+运行 python app_gradio.py，终端输出 Running on local URL: http://127.0.0.1:7860。
+
+打开浏览器，输入问题 "What is Veracier's R&D spending?"，能看到：
+
+右侧推理轨迹逐步出现（意图分类 → 检索中 → 充分性检查 → 生成中）。
+
+答案逐字输出。
+
+左侧对话框显示完整对话历史。
+
+展开“检索来源”能看到 chunk_id 和文本片段。
+
+P0-4: 参数覆盖与状态同步（config.py + workflow.py 联动）
+需求：
+
+修改 config.py，在 RAGConfig 类中增加 from_dict 方法，允许运行时覆盖配置。
+
+在 run_workflow_streaming 中接收 config_override 字典（如 {"TOP_K": 10, "LLM_TEMPERATURE": 0.5}），在构建图之前临时应用。
+
+确保检索器 HybridRetriever 的 search 方法能够使用覆盖后的 top_k 值（目前是 config.TOP_K，修改为动态参数或全局变量）。
+
+建议实现（最小改动）：
+
+在 workflow.py 中维护一个全局 _runtime_config = config.RAGConfig()，在 run_workflow_streaming 开头根据 config_override 更新它，并传递给节点函数。
+
+各节点函数从 _runtime_config 读取参数，而非直接导入 config 常量。
+
+P0-5: 错误处理与友好提示
+需求：
+
+如果索引文件不存在（chunks.jsonl 缺失），界面顶部显示红色警告横幅，提示用户运行 python data_prepare.py。
+
+如果 LLM API Key 未设置，捕获异常并在界面中显示错误信息（而不是崩溃）。
+
+如果工作流执行超过 120 秒，自动超时并提示“请求处理时间过长，请简化问题或增加检索上限”。
+
+四、文件改动清单（Claude Code 执行参考）
+操作	文件	说明
+修改	llm_client.py	新增 get_llm_response_stream 函数
+修改	workflow.py	新增 run_workflow_streaming 生成器函数；增加 _runtime_config 支持
+修改	config.py	增加 STREAMING_ENABLED 和 from_dict 方法（可选，若需要动态覆盖）
+新增	app_gradio.py	主界面文件（约 200~300 行）
+修改	requirements_v0_1.txt	添加 gradio>=4.0.0
+五、验收标准（v0.3 完成的定义）
+✅ python app_gradio.py 无报错启动，浏览器可访问。
+
+✅ 输入 "What is Veracier Industries?"：
+
+右侧“推理轨迹”依次显示：意图分类 → 规划 → 检索(5个块) → 充分性检查 → 生成答案。
+
+答案逐字出现（非一次性加载）。
+
+答案中至少包含一个 [doc_xxx] 引用。
+
+展开“检索来源”能看到具体 chunk 内容。
+
+✅ 调整 Top-K 滑块到 10，再次提问，检索到的 chunk 数量变为 10（可从轨迹或来源面板验证）。
+
+✅ 界面整体美观，无排版错乱。
+
+✅ 返回的 share=True 公网链接能正常打开（需梯子或网络畅通，如失败不阻塞验收）。
+
+六、与现有代码的兼容性要求
+不破坏 main.py 的 CLI 功能（用户仍可命令行运行）。
+
+不破坏 test_e2e.py 和 test_mvp.py 的测试。
+
+HybridRetriever 单例模式保持不变，Gradio 多请求时复用单例（避免重复加载索引）。
+
+七、风险与缓解措施
+风险	缓解措施
+流式生成中 LLM API 超时	在 get_llm_response_stream 中捕获超时异常，yield 错误信息并终止流
+Gradio 界面卡死（同步阻塞）	使用 demo.queue() 和 gr.Chatbot 的流式更新机制，确保异步
+多用户同时请求导致检索器冲突	HybridRetriever 是只读单例，线程安全，无需加锁
+推理轨迹过长撑爆文本框	限制轨迹文本框最大 50 行，超出滚动（Gradio 默认支持滚动）

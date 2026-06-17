@@ -1,0 +1,51 @@
+# Agentic RAG v0.3.1 — Dependency List
+# Install: pip install -r requirements.txt
+#
+# System requirements (must be installed separately):
+#   - Tesseract OCR: https://github.com/tesseract-ocr/tesseract
+#     Languages needed: fra, eng, deu, ita, spa
+#     Windows: choco install tesseract --pre
+#     Ubuntu:  sudo apt install tesseract-ocr tesseract-ocr-fra tesseract-ocr-deu tesseract-ocr-ita tesseract-ocr-spa
+#     macOS:   brew install tesseract tesseract-lang
+#   - poppler (for pdf2image):
+#     Windows: download from http://blog.alivate.com.au/poppler-windows/
+#     Ubuntu:  sudo apt install poppler-utils
+#     macOS:   brew install poppler
+
+# Core: LangGraph workflow framework
+langgraph>=0.0.20
+langchain>=0.1.0
+langchain-openai>=0.0.5
+
+# LLM API clients
+openai>=1.0.0
+anthropic>=0.18.0
+
+# Embeddings & vector search
+sentence-transformers>=2.2.2
+faiss-cpu>=1.7.4
+
+# Sparse retrieval
+rank-bm25>=0.2.2
+
+# PDF processing
+PyMuPDF>=1.23.0
+pytesseract>=0.3.10
+pdf2image>=1.16.0
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+pydantic>=2.0.0
+
+# Progress bars
+tqdm>=4.65.0
+
+# Token counting (optional, for tiktoken-based chunking)
+tiktoken>=0.5.0
+
+# NLP toolkit (sentence tokenization)
+nltk>=3.8.0
+
+# Web UI (v0.3+)
+gradio>=4.0.0

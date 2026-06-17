@@ -1,0 +1,267 @@
+==============================================================================
+  Agentic RAG 企业知识库系统 — 项目说明
+  Veracier Industries (EDiTh) 数据集
+==============================================================================
+
+一、项目概述
+------------------------------------------------------------------------------
+本项目实现了一个基于 LangGraph 的 Agentic RAG（检索增强生成）系统，用于
+Veracier Industries 企业知识库的智能问答。
+
+数据集包含 1004 份 PDF 文档，涵盖 9 个子公司实体，支持法语(53.5%)、英语
+(23.4%)、德语(9.9%)、意大利语、西班牙语等多语言文档。
+
+系统实现 问题 → 混合检索 → Agent决策 → 答案生成 的完整闭环，并能展示
+Agent 的主动决策过程。
+
+
+二、已完成的工作
+------------------------------------------------------------------------------
+
+2.1 项目文件清单
+
+| 文件              | 行数 | 状态   | 说明                                      |
+|-------------------|------|--------|-------------------------------------------|
+| config.py         | 142  | 完成   | 集中配置：所有参数可通过 RAG_* 环境变量覆盖 |
+| workflow.py       | 876  | 框架   | LangGraph 工作流：7个节点桩 + 路由 + 状态   |
+| retriever.py      | 430  | 框架   | 混合检索器：FAISS + BM25 + RRF 融合         |
+| data_prepare.py   | 685  | 框架   | 数据准备：PDF提取 → 分块 → 建索引           |
+| main.py           | 275  | 完成   | CLI 入口：单问题 / 批处理 / 交互式 REPL     |
+| test_mvp.py       | 645  | 完成   | MVP 成功标准测试：10项测试全部通过           |
+
+2.2 数据模型（workflow.py）
+
+  RetrievedChunk — 检索结果块
+    - chunk_id: str          # 格式: doc_N
+    - text: str              # 文本内容
+    - score: float           # RRF 融合得分
+    - metadata: dict         # 来源信息
+
+  RAGState — 工作流状态
+    - question: str                       # 用户问题
+    - intent: "simple"|"multi_hop"|"unclear"  # 意图分类
+    - sub_questions: list[str]            # 多跳子问题
+    - current_sub_idx: int                # 当前子问题索引
+    - accumulated_chunks: list[RetrievedChunk]  # 累积检索结果
+    - information_sufficient: bool        # 信息是否足够
+    - missing_information: str|None       # 缺失信息描述
+    - final_answer: str|None              # 最终答案
+    - clarification_question: str|None    # 澄清问题
+    - retry_count: int                    # 重试计数（上限3）
+    - reasoning_trace: list[str]          # 决策追溯
+
+2.3 工作流节点（7个，当前为桩实现）
+
+  节点1: classify_intent  — 意图分类（simple/multi_hop/unclear）
+  节点2: ask_clarification — 生成澄清反问（unclear路径）
+  节点3: plan_sub_questions — 多跳问题拆解为子问题列表
+  节点4: retrieve          — 混合检索（FAISS + BM25 + RRF）
+  节点5: check_sufficiency — 判断累积chunk是否足以回答
+  节点6: refine_query      — 根据缺失信息改写查询词
+  节点7: generate_answer   — 生成最终答案（含引用）
+
+2.4 工作流路由
+
+  START
+    └→ classify_intent
+         ├─ unclear  → ask_clarification → END
+         ├─ simple   → retrieve → check_sufficiency
+         └─ multi_hop → plan_sub_questions → retrieve → check_sufficiency
+                                                          ├─ sufficient → generate_answer → END
+                                                          ├─ insufficient + retry<3 → refine_query → retrieve (重试)
+                                                          └─ insufficient + retry≥3 → generate_answer (强制声明"信息不足")
+
+2.5 检索器设计（retriever.py）
+
+  - 向量检索: BAAI/bge-base-en-v1.5 → FAISS IndexFlatIP（内积=余弦相似度）
+  - 稀疏检索: rank_bm25.BM25Okapi（语言无关的分词器）
+  - RRF 融合: score = Σ 1/(k + rank), k=60
+  - 确定性: 相同查询始终返回相同结果
+  - 懒加载: 首次查询时才加载索引，不影响模块导入
+
+2.6 测试结果（test_mvp.py）
+
+  全部 10 项测试通过 (100%):
+
+  ✅ 图编译              — LangGraph 成功编译
+  ✅ 意图分类结构         — 输出合法意图值
+  ✅ 简单问题路径         — 20/20 (100%) > 目标 80%
+  ✅ 多跳问题路径         — 10/10 (100%) > 目标 60%
+  ✅ 模糊问题澄清         — 3/3 (100%) = 目标 100%
+  ✅ 不编造保障           — retry≥3时输出"信息不足"声明
+  ✅ 重试上限             — 不超过 config.max_retries(3)
+  ✅ 路由函数             — 所有路由返回正确值
+  ✅ 输出格式验证         — JSON包含所有必要字段
+  ✅ 确定性检索           — 相同查询相同结果
+
+
+三、当前桩实现说明
+------------------------------------------------------------------------------
+
+所有节点函数目前为"桩"（Stub）实现——它们返回预设值而非调用 LLM。
+这确保了框架可以编译、运行、测试，但尚不能产生真实的 AI 回答。
+
+桩行为一览:
+  classify_intent   : 始终返回 "simple"
+  ask_clarification : 返回占位澄清问题
+  plan_sub_questions: 生成2个朴素子问题
+  retrieve          : 返回1个假chunk（不依赖实际索引）
+  check_sufficiency : 始终返回 sufficient=True
+  refine_query      : 在查询前添加 "refined:" 前缀
+  generate_answer   : 返回占位答案，含 chunk 引用
+
+
+四、使用方法
+------------------------------------------------------------------------------
+
+4.1 环境准备
+
+  虚拟环境路径: E:\anaconda3\envs\graph
+  Python 版本: 3.12
+
+  已安装依赖:
+    - langgraph         （工作流编排）
+    - langchain, langchain-openai  （LLM调用）
+    - sentence_transformers （向量嵌入）
+    - faiss-cpu         （向量检索）
+    - rank-bm25         （稀疏检索）
+    - pymupdf           （PDF文本提取）
+    - pydantic          （数据模型）
+    - numpy, pandas, tqdm
+
+4.2 运行方式
+
+  # 交互式问答
+  python main.py --interactive
+
+  # 单个问题
+  python main.py "What was Veracier's R&D spending in 2022?"
+
+  # 从文件批量处理（每行一个问题）
+  python main.py --file questions.txt
+
+  # 详细日志
+  python main.py -v "你的问题"
+
+  # 运行测试
+  python test_mvp.py --verbose
+
+4.3 数据准备（首次使用前运行）
+
+  # 处理全部 1004 个 PDF（耗时长）
+  python data_prepare.py
+
+  # 仅处理前 50 个 PDF（快速测试）
+  python data_prepare.py --limit 50
+
+  # 跳过 OCR（仅处理 searchable PDF，更快）
+  python data_prepare.py --skip-ocr
+
+  # 指定输出目录
+  python data_prepare.py --output-dir ./my_indexes
+
+  输出文件:
+    - chunks.jsonl      （文本块，每行一个 JSON）
+    - faiss.index       （FAISS 向量索引）
+    - bm25_index.pkl    （BM25 稀疏索引）
+
+4.4 输出格式
+
+  {
+    "answer": "最终答案字符串",
+    "reasoning_trace": ["步骤1", "步骤2", ...],
+    "retrieved_sources": ["doc_0", "doc_5", ...],
+    "intent": "simple",
+    "final_state": { ... }
+  }
+
+
+五、后续改进方案
+------------------------------------------------------------------------------
+
+5.1 紧急（使系统可用）
+
+  □ 实现 LLM 调用 — 在各节点桩中填入 langchain LLM 调用
+    - 配置 API Key (OPENAI_API_KEY 或 ANTHROPIC_API_KEY)
+    - 取消 classify_intent / check_sufficiency / generate_answer 中的 TODO
+    - 测试多语言提示词效果（法语/德语问题的分类准确度）
+
+  □ 运行 data_prepare.py 构建真实索引
+    - 安装 Tesseract OCR 及语言包（处理 17.8% 的扫描件 PDF）
+    - 根据 MASTER_INDEX.csv 的 format 字段选择合适的提取策略
+    - 调优 chunk_size（当前512）和 chunk_overlap（当前128）
+
+  □ 测试 retrieve 节点的真实检索效果
+    - 验证 FAISS + BM25 + RRF 在不同语言上的命中率
+    - 对比纯 FAISS 与混合检索的 recall@5
+
+5.2 中期（提升质量）
+
+  □ 多语言优化
+    - 考虑使用多语言嵌入模型（如 BAAI/bge-m3）替代 bge-base-en-v1.5
+    - 为 BM25 添加语言检测 + 对应停用词过滤
+    - 非英语查询的翻译增强（query translation）
+
+  □ 检索质量提升
+    - 实现 HyDE（Hypothetical Document Embeddings）查询扩展
+    - 添加 cross-encoder reranker（如 Cohere Rerank 或 BGE-Reranker）
+    - 实现查询改写中的同义词扩展（针对企业术语）
+
+  □ 评估体系
+    - 使用 ANSWER_KEY.json 中的 ground_truth 进行端到端评估
+    - 计算各问题的 recall@5、precision@5、MRR
+    - 按语言、文档类型分类报告指标
+
+5.3 长期（生产化）
+
+  □ 性能优化
+    - FAISS 切换为 IVF 或 HNSW 索引（当前为暴力搜索 IndexFlatIP）
+    - 添加 embedding 缓存（相同查询不重复编码）
+    - 向量检索与 BM25 检索并行化
+
+  □ 功能扩展
+    - 语义缓存（Semantic Cache）：相似问题直接返回缓存答案
+    - 流式输出（Streaming）：逐步返回生成的答案
+    - MCP Server 集成：作为工具提供给其他 Agent 调用
+    - 多租户/权限控制：按用户角色限制可检索的文档范围
+    - 支持对话式多轮问答（conversation history）
+
+  □ 监控与运维
+    - 添加 LangSmith / LangFuse 追踪
+    - 检索延迟和 LLM 调用延迟监控
+    - 答案质量人工评分反馈回路
+
+  □ 部署
+    - Docker 容器化
+    - FastAPI 包装为 REST API
+    - 向量数据库迁移（如 Milvus / Qdrant 替代 FAISS 文件索引）
+
+
+六、配置参数参考（config.py）
+------------------------------------------------------------------------------
+
+  RAG_CHUNK_SIZE=512          # 分块大小（tokens）
+  RAG_CHUNK_OVERLAP=128       # 分块重叠（tokens）
+  RAG_EMBEDDING_MODEL=BAAI/bge-base-en-v1.5  # 嵌入模型
+  RAG_TOP_K=5                 # 检索返回数量
+  RAG_RRF_K=60                # RRF 平滑常数
+  RAG_LLM_PROVIDER=openai     # LLM 提供商: openai / anthropic
+  RAG_LLM_MODEL=gpt-4o-mini   # LLM 模型名
+  RAG_MAX_RETRIES=3           # 最大重试次数
+  RAG_OCR_LANGUAGE=fra+eng+deu+ita+spa  # Tesseract OCR 语言
+
+  所有参数均可通过环境变量覆盖（前缀 RAG_）:
+    set RAG_TOP_K=10
+    set RAG_LLM_MODEL=gpt-4o
+    python main.py "你的问题"
+
+
+七、相关文件路径
+------------------------------------------------------------------------------
+
+  项目根目录:    E:\agentProject\companyrag
+  虚拟环境:      E:\anaconda3\envs\graph
+  数据集:        E:\agentProject\companyrag\veracier-industries
+  设计文档:      E:\agentProject\companyrag\MVP.txt
+  答案参考:      E:\agentProject\companyrag\veracier-industries\ANSWER_KEY.json
+  文档索引:      E:\agentProject\companyrag\veracier-industries\MASTER_INDEX.csv

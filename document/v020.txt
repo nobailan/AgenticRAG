@@ -1,0 +1,355 @@
+========================================================================
+  Agentic RAG v0.2 — 改进说明与使用方法
+========================================================================
+
+版本：v0.2
+日期：2026-06-16
+基于：v0.1（P0-1 至 P0-6 全部完成）
+虚拟环境：E:\anaconda3\envs\graph
+
+
+========================================================================
+一、v0.2 改进概要
+========================================================================
+
+v0.2 在 v0.1 完整代码基础上完成了以下实际运行验证和改进：
+
+┌──────────────────────────────────────────────────────────────────┐
+│ 1. 本地 Embedding 模型部署                                       │
+│    - 模型路径: E:\agentProject\embedding-model\                  │
+│    - 可用模型:                                                    │
+│      • bge-base-en-v1.5   (768维, 英文优化, 438MB)               │
+│      • bge-small-en-v1.5  (384维, 英文优化, 133MB)               │
+│      • bge-small-zh-v1.5  (512维, 中文优化, 95MB)                │
+│      • bert-base-chinese  (768维, 中文基础, 412MB)               │
+│    - 使用方式: --embedding-model 或 RAG_EMBEDDING_MODEL 环境变量 │
+│                                                                   │
+│ 2. 索引生成（200 PDF）                                            │
+│    - 成功处理 150 个可搜索 PDF（50 个扫描件跳过）                  │
+│    - 生成 558 个文档块                                            │
+│    - FAISS 向量索引: 558 × 768 维 (IndexFlatIP)                   │
+│    - BM25 稀疏索引: 558 文档 (BM25Okapi)                          │
+│    - 总耗时: ~2 分 46 秒（含 embedding 编码 ~2 分 32 秒）         │
+│                                                                   │
+│ 3. 端到端验证（5 个真实问题）                                     │
+│    - 5/5 全部通过                                                  │
+│    - 真实文档检索 + LLM 生成答案 + [doc_N] 引用                   │
+│    - retry 循环正常（3 次 refine→retrieve→check）                 │
+│    - 推理轨迹 14+ 步                                               │
+└──────────────────────────────────────────────────────────────────┘
+
+
+========================================================================
+二、与 v0.1 的差异
+========================================================================
+
+┌──────────────────────┬─────────────────┬──────────────────────────┐
+│ 项目                  │ v0.1             │ v0.2                     │
+├──────────────────────┼─────────────────┼──────────────────────────┤
+│ Embedding 模型        │ 需 HuggingFace   │ 本地路径直接加载          │
+│                       │ 联网下载          │ 无需网络                  │
+├──────────────────────┼─────────────────┼──────────────────────────┤
+│ 索引状态              │ 不存在           │ 558 chunks 已生成         │
+├──────────────────────┼─────────────────┼──────────────────────────┤
+│ 检索器                │ 抛出 FileNotFound │ 返回真实文档块           │
+│                       │ Error            │                           │
+├──────────────────────┼─────────────────┼──────────────────────────┤
+│ e2e 来源检查          │ 自动跳过          │ 正常验证（sources≥1）     │
+│                       │ (索引缺失)        │                           │
+├──────────────────────┼─────────────────┼──────────────────────────┤
+│ LLM 答案              │ fallback 错误信息 │ 真实答案 + 引用          │
+│                       │ (generate 失败)   │                           │
+├──────────────────────┼─────────────────┼──────────────────────────┤
+│ 数据准备              │ --embedding-model │ 新增参数，实测通过       │
+│                       │ 参数已添加         │                          │
+└──────────────────────┴─────────────────┴──────────────────────────┘
+
+
+========================================================================
+三、使用方法
+========================================================================
+
+3.1 环境准备（一次性）
+---------------------
+# 1. 激活虚拟环境
+E:\anaconda3\envs\graph\Scripts\activate
+
+# 2. 安装依赖（如未安装）
+pip install -r requirements_v0_1.txt
+
+# 3. 设置 API Key（二选一）
+# PowerShell:
+$env:DEEPSEEK_API_KEY = "sk-xxxxxxxxxxxxxxxx"
+# 或 OpenAI:
+$env:OPENAI_API_KEY = "sk-xxxxxxxxxxxxxxxx"
+
+# 4. 设置 LLM 模型（DeepSeek 用户必须）
+$env:RAG_LLM_MODEL = "deepseek-v4-pro"
+
+# 5. 设置本地 Embedding 模型路径
+$env:RAG_EMBEDDING_MODEL = "E:/agentProject/embedding-model/bge-base-en-v1.5"
+
+# 6. （可选）使用更小的模型以加速
+$env:RAG_EMBEDDING_MODEL = "E:/agentProject/embedding-model/bge-small-en-v1.5"
+# 注意: bge-small-en-v1.5 是 384 维，需同步设置:
+$env:RAG_EMBEDDING_MODEL = "E:/agentProject/embedding-model/bge-small-en-v1.5"
+# （data_prepare.py 会自动更新 embedding_dim）
+
+
+3.2 生成/重建索引
+-----------------
+# 快速测试（10 个 PDF）
+python data_prepare.py --limit 10 --skip-ocr `
+    --embedding-model "E:/agentProject/embedding-model/bge-base-en-v1.5"
+
+# 标准索引（200 个 PDF，推荐）
+python data_prepare.py --limit 200 --skip-ocr `
+    --embedding-model "E:/agentProject/embedding-model/bge-base-en-v1.5"
+
+# 完整索引 + OCR（全部 PDF，含扫描件，耗时长）
+python data_prepare.py --limit 500 `
+    --embedding-model "E:/agentProject/embedding-model/bge-base-en-v1.5"
+
+# 自定义输出目录
+python data_prepare.py --limit 200 --skip-ocr `
+    --output-dir ./my_indexes `
+    --embedding-model "E:/agentProject/embedding-model/bge-base-en-v1.5"
+
+# 注意：
+# - --skip-ocr 跳过 scanned 和 mixed 格式的 PDF（约 25%）
+# - 不加 --skip-ocr 会尝试 OCR 处理扫描件（需安装 Tesseract）
+# - --embedding-model 接受 HuggingFace 模型名或本地绝对路径
+
+
+3.3 运行问答
+------------
+# 单个问题（需要先设置环境变量）
+RAG_LLM_MODEL=deepseek-v4-pro `
+RAG_EMBEDDING_MODEL="E:/agentProject/embedding-model/bge-base-en-v1.5" `
+python main.py "What is Veracier Industries?"
+
+# 交互模式
+python main.py --interactive
+
+# 交互模式命令：
+#   /help    — 帮助
+#   /quit    — 退出
+#   /status  — 索引状态（chunks数、LLM配置等）
+#   /graph   — 工作流拓扑
+
+# 批量处理
+python main.py --file questions.txt
+
+# 输出到文件
+python main.py "R&D spending 2022" --output answer.json
+
+# 详细日志
+python main.py --interactive --verbose
+
+
+3.4 运行测试
+-----------
+# 结构性测试（无需索引）
+python test_mvp.py --verbose
+
+# 端到端测试（需要索引 + LLM）
+RAG_LLM_MODEL=deepseek-v4-pro `
+RAG_EMBEDDING_MODEL="E:/agentProject/embedding-model/bge-base-en-v1.5" `
+python test_e2e.py --verbose --limit 5
+
+# 快速 e2e（2 个问题）
+RAG_LLM_MODEL=deepseek-v4-pro `
+RAG_EMBEDDING_MODEL="E:/agentProject/embedding-model/bge-base-en-v1.5" `
+python test_e2e.py --limit 2
+
+
+3.5 检索器独立测试
+------------------
+python -c "from retriever import HybridRetriever; r=HybridRetriever(); `
+    print(r.search('R&D spending', 3))"
+
+
+========================================================================
+四、本地 Embedding 模型参考
+========================================================================
+
+路径: E:\agentProject\embedding-model\
+
+┌─────────────────────────┬──────┬───────┬──────────────────────────┐
+│ 模型目录                 │ 维度 │ 大小  │ 适用场景                  │
+├─────────────────────────┼──────┼───────┼──────────────────────────┤
+│ bge-base-en-v1.5        │ 768  │ 438MB │ 英文为主的多语言检索（推荐）│
+│ bge-small-en-v1.5       │ 384  │ 133MB │ 英文快速检索（精度略低）    │
+│ bge-small-zh-v1.5       │ 512  │ 95MB  │ 中文优化检索                │
+│ bert-base-chinese       │ 768  │ 412MB │ 中文基础模型（无指令微调）  │
+└─────────────────────────┴──────┴───────┴──────────────────────────┘
+
+切换模型：
+  1. 通过命令行参数（仅 data_prepare.py）:
+     --embedding-model "E:/agentProject/embedding-model/bge-small-en-v1.5"
+
+  2. 通过环境变量（全局生效，推荐）:
+     $env:RAG_EMBEDDING_MODEL = "E:/agentProject/embedding-model/bge-small-en-v1.5"
+
+  3. data_prepare.py 会自动检测模型实际维度并更新 config.embedding_dim，
+     无需手动修改配置。
+
+注意：
+  - 切换模型后必须重新运行 data_prepare.py 重建索引
+  - FAISS 索引维度必须与 embedding 模型维度匹配
+  - 当前 faiss.index 是 768 维（bge-base-en-v1.5）
+
+
+========================================================================
+五、当前索引内容
+========================================================================
+
+生成命令:
+  python data_prepare.py --limit 200 --skip-ocr
+    --embedding-model "E:/agentProject/embedding-model/bge-base-en-v1.5"
+
+数据来源:
+  veracier-industries/by_entity/by_entity/ (EDITH 数据集)
+
+索引范围:
+  ┌──────────────────┬────────┐
+  │ 实体              │ PDF 数 │
+  ├──────────────────┼────────┤
+  │ veracier_sa      │ 约 30  │
+  │ veracier_aero    │ 约 60  │
+  │ veracier_defense │ 约 20  │
+  │ veracier_energie │ 约 15  │
+  │ veracier_gmbh    │ 约 15  │
+  │ precistec        │ 约 10  │
+  │ ...              │ ...    │
+  ├──────────────────┼────────┤
+  │ 合计              │ 150    │
+  └──────────────────┴────────┘
+
+文件:
+  chunks.jsonl      — 558 个文档块 (JSONL, 每行一个块)
+  faiss.index       — FAISS IndexFlatIP (558 × 768 维 float32)
+  bm25_index.pkl    — Pickle 的 BM25Okapi (558 文档)
+
+块格式示例:
+  {
+    "chunk_id": "doc_0",
+    "text": "[Page 1]\nPT\nPrecis-Tec S.A.\n...",
+    "metadata": {
+      "source_file": "precistec/contrats/acquired/xxx.pdf",
+      "entity": "precistec",
+      "language": "fr",
+      "format": "searchable",
+      "pages": 9,
+      "classification": "..."
+    },
+    "embedding_idx": 0
+  }
+
+
+========================================================================
+六、配置速查
+========================================================================
+
+关键环境变量（PowerShell 格式）:
+
+┌──────────────────────────────┬─────────────────────────────────────────┐
+│ 变量                          │ 推荐值                                   │
+├──────────────────────────────┼─────────────────────────────────────────┤
+│ DEEPSEEK_API_KEY              │ sk-xxxxxxxx (DeepSeek API Key)          │
+│ RAG_LLM_MODEL                 │ deepseek-v4-pro                         │
+│ RAG_EMBEDDING_MODEL           │ E:/agentProject/embedding-model/        │
+│                              │ bge-base-en-v1.5                        │
+│ RAG_TOP_K                     │ 5                                       │
+│ RAG_MAX_RETRIES               │ 3                                       │
+│ RAG_CHUNK_SIZE                │ 512                                     │
+│ RAG_LOG_LEVEL                 │ INFO (DEBUG 可看详细日志)               │
+└──────────────────────────────┴─────────────────────────────────────────┘
+
+一次性设置（PowerShell Profile 或每次启动）:
+  $env:DEEPSEEK_API_KEY = "sk-xxxxxxxx"
+  $env:RAG_LLM_MODEL = "deepseek-v4-pro"
+  $env:RAG_EMBEDDING_MODEL = "E:/agentProject/embedding-model/bge-base-en-v1.5"
+
+
+========================================================================
+七、e2e 测试详细结果（v0.2）
+========================================================================
+
+测试时间: 2026-06-16 15:11~
+LLM: deepseek-v4-pro
+Embedding: bge-base-en-v1.5 (本地)
+
+┌──────────┬───────────┬─────────┬────────┬─────────┬───────────────────┐
+│ 问题 ID   │ intent    │ 答案长度 │ 来源数  │ 轨迹步数 │ 备注               │
+├──────────┼───────────┼─────────┼────────┼─────────┼───────────────────┤
+│ CEO-01   │ multi_hop │ >100    │ ≥1     │ ≥10     │ 风险地图查询       │
+│ LEGAL-02 │ multi_hop │ >100    │ ≥1     │ ≥10     │ CNIL数据条款审计   │
+│ PROC-02  │ multi_hop │ >100    │ ≥1     │ ≥10     │ RSE认证查询        │
+│ QUAL-01  │ simple    │ >100    │ ≥1     │ ≥10     │ AV-3000生产档案    │
+│ SALES-01 │ simple    │ 470     │ 13     │ 14      │ 出口管制(3次retry) │
+├──────────┴───────────┴─────────┴────────┴─────────┴───────────────────┤
+│ 结果: 5/5 通过                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+
+说明：
+  - SALES-01 问题答案中不含 [doc_N] 引用（LLM 判断文档不足以回答），
+    自动追加了 "来源：参考文档 doc_xxx, doc_yyy..."
+  - 其他 4 个问题均包含 [doc_N] 格式的引用
+  - 所有答案无占位符、无 stub 内容
+
+
+========================================================================
+八、已知限制与后续方向
+========================================================================
+
+当前限制:
+  1. 仅处理了 200 个 PDF 中的 150 个可搜索 PDF（50 个扫描件跳过）
+     完整数据集有 1022 个唯一 PDF
+  2. OCR 扫描件处理未启用（需安装 Tesseract + poppler）
+  3. bge-base-en-v1.5 是英文优化模型，数据集含法语/德语文档
+  4. 未使用 Cross-encoder 重排序
+  5. 未实现多轮对话
+
+后续改进方向（v0.3 候选）:
+  - 启用 OCR 处理扫描件
+  - 添加 Cross-encoder 重排序提升精度
+  - 多语言 embedding 模型（如 paraphrase-multilingual）
+  - 语义缓存减少 LLM 重复调用
+  - 流式输出
+
+
+========================================================================
+九、文件清单
+========================================================================
+
+项目根目录 (E:\agentProject\companyrag\):
+
+  核心模块:
+    config.py              — 配置中心（所有参数）
+    llm_client.py          — LLM 调用封装（v0.1 新增）
+    retriever.py           — HybridRetriever 混合检索器
+    workflow.py            — LangGraph 7 节点工作流
+    data_prepare.py        — 数据准备流水线
+    main.py                — CLI 入口
+
+  测试:
+    test_mvp.py            — 结构性测试（10 项）
+    test_e2e.py            — 端到端测试（v0.1 新增）
+
+  索引文件（v0.2 生成）:
+    chunks.jsonl           — 558 个文档块
+    faiss.index            — FAISS 向量索引
+    bm25_index.pkl         — BM25 稀疏索引
+
+  文档:
+    v0_1_0.txt             — 原始需求文档
+    v010.txt               — v0.1 改动说明
+    v020.txt               — 本文件（v0.2 改进说明）
+    requirements_v0_1.txt  — Python 依赖清单
+
+  数据集:
+    veracier-industries/   — EDITH 数据集 (MASTER_INDEX.csv + PDFs)
+
+  本地模型:
+    E:\agentProject\embedding-model\  — 4 个预下载的 embedding 模型

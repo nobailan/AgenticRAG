@@ -1,0 +1,33 @@
+================================================================
+  Agentic RAG 测试问题集 — Veracier Industries 企业知识库
+  (共 10 题，基于 8,672 chunks 的实际内容编写，均可回答)
+================================================================
+
+1. Where is Veracier Industries S.A. headquartered, and what is its RCS number?
+
+2. What is the Group's operating margin, and what caused the decline from the previous year?
+
+3. How many subsidiaries does Veracier have? Name at least five and their locations.
+
+4. What was the net cash position of the Group as of December 31, and how much did it increase compared to the prior year?
+
+5. What are the late delivery penalties in Veracier's standard supplier contracts, and what is the maximum penalty cap?
+
+6. What was the budget for the annual training plan, and what percentage of payroll does it represent? Which areas are prioritized?
+
+7. What cybersecurity gaps were identified during the NIS2 risk assessment, and which sites were affected?
+
+8. What litigation does Veracier Aero face regarding the AV-3000 program? Who is the claimant and what amount was recommended to provision?
+
+9. What are the details of the Sentinel arbitration case — how many patents are disputed, what are their patent numbers, and what is Sentinel demanding?
+
+10. What raw material price increases caused the 4.2% production cost overrun, and by what percentage did each material increase?
+
+================================================================
+  使用说明:
+  - 问题 1-5: simple 意图（单次检索即可回答）
+  - 问题 6-8: 可能需要 1-2 次检索（部分信息分布在相邻 chunk 中）
+  - 问题 9-10: 可能需要 multi_hop（信息分散在不同文档中）
+  - 建议 Top-K 设为 5-10，Temperature 保持 0.0
+  - 每个问题应能在答案中找到 [doc_N] 引用标记
+================================================================

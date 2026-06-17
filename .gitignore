@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+
+# Gradio
+.gradio/
+
+# Environment variables (.env 不应提交，使用 .env.template 作为参考)
+.env
+
+# Generated index files (通过 data_prepare.py 重新生成)
+chunks.jsonl
+faiss.index
+bm25_index.pkl
+
+# Dataset (私有数据集，不提交到 Git)
+veracier-industries/
+
+# Crash dumps
+*.stackdump
+
+# OS files
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+logs/

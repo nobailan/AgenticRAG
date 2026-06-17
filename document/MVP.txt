@@ -1,0 +1,192 @@
+企业级AgenticRAG知识库系统 – MVP 精确设计
+0. 范围限定
+数据源：仅使用 EDiTh (Veracier Industries) 数据集中的 文本块 和 预定义的问答对（如果有）。
+
+不包含：多租户、权限控制、语义缓存、MCP Server集成、Docker部署、流式输出、监控告警。
+
+目标：在命令行或简单API上，实现 问题 → 混合检索 → Agent决策 → 答案生成 的闭环，并能展示Agent的主动决策过程。
+
+1. 输入输出
+项目	规范
+输入	自然语言问题（字符串），例如 "What was Veracier's R&D spending in 2022?"
+输出	一个JSON对象，包含：
+- answer: 最终答案字符串
+- reasoning_trace: 每一步的决策记录（列表）
+- retrieved_sources: 用到的文档片段ID列表
+2. 状态定义（无歧义字段）
+python
+from typing import List, Dict, Literal, Optional
+from pydantic import BaseModel
+
+class RetrievedChunk(BaseModel):
+    chunk_id: str
+    text: str
+    score: float          # 混合检索后的最终得分
+    metadata: Dict        # 例如 {"source_file": "xxx.pdf", "page": 12}
+
+class RAGState(BaseModel):
+    # 输入
+    question: str
+
+    # 意图分类（三选一）
+    intent: Literal["simple", "multi_hop", "unclear"]
+
+    # 多跳规划（仅当 intent == "multi_hop" 时使用）
+    sub_questions: List[str]          # 拆解出的子问题列表，例如 ["What is the carbon neutrality target year?", "Which department is responsible for that target?"]
+    current_sub_idx: int              # 当前正在处理的子问题索引（从0开始）
+
+    # 检索结果累积
+    accumulated_chunks: List[RetrievedChunk]   # 所有已检索到的chunks（去重，按score降序）
+
+    # 评估节点输出
+    information_sufficient: bool      # True: 目前累积的chunks足以回答当前子问题或原问题
+    missing_information: Optional[str] # 当 sufficient==False 时，必须输出缺失什么信息（例如 "missing specific year for R&D spending"）
+
+    # 最终答案
+    final_answer: Optional[str]
+
+    # 澄清（仅当 intent == "unclear" 时使用）
+    clarification_question: Optional[str]
+
+    # 控制字段
+    retry_count: int                  # 当前流程的重试次数（用于避免无限循环，上限为3）
+3. 工作流节点（每个节点的输入/输出/行为精确定义）
+节点1: classify_intent
+输入：question
+
+输出：intent (simple / multi_hop / unclear)
+
+行为：调用LLM，提示词必须为：
+
+text
+判断以下问题是否需要多步推理才能回答。
+如果答案可以直接从一段文档中找到，返回 "simple"。
+如果必须从多个文档中拼凑或逐步推理，返回 "multi_hop"。
+如果问题本身模糊或缺少必要实体，返回 "unclear"。
+问题：{question}
+只返回一个单词。
+节点2: ask_clarification（仅当 intent=unclear）
+输入：question
+
+输出：clarification_question
+
+行为：调用LLM生成一个反问句，要求用户补充缺失信息。然后终止流程（不再进入后续检索）。
+
+节点3: plan_sub_questions（仅当 intent=multi_hop）
+输入：question
+
+输出：sub_questions (长度 ≥ 2)
+
+行为：调用LLM将原问题拆解为 有顺序依赖的子问题列表。例如原问题：“哪个部门负责Veracier的碳中和计划？”拆解为：
+
+Veracier的碳中和目标年份是多少？
+哪个部门负责该目标？
+拆解规则：每个子问题必须能够独立通过一次检索回答。
+节点4: retrieve
+输入：query (字符串) + top_k (固定为5)
+
+输出：List[RetrievedChunk] (按score降序)
+
+行为：
+
+对 query 执行混合检索（向量 + BM25 + RRF融合）。
+
+向量模型固定使用 BAAI/bge-base-en-v1.5。
+
+返回前 top_k 个chunk。
+
+实现细节不在此设计约束，但 检索必须是确定性的（相同query给出相同顺序）。
+
+节点5: check_sufficiency
+输入：question (当前正在回答的问题，可能是原问题或子问题) + accumulated_chunks (所有已检索到的chunks)
+
+输出：information_sufficient (bool) + missing_information (str if sufficient==False else None)
+
+行为：
+
+调用LLM，提示词模板：
+
+text
+你是一个评审员。根据提供的文档片段，判断是否能准确回答用户问题。
+如果能回答，输出：SUFFICIENT
+如果不能，输出：INSUFFICIENT，并说明缺少什么具体信息（例如“缺少2022年的研发支出数字”）。
+用户问题：{question}
+文档片段：
+{formatted_chunks}
+只输出格式：SUFFICIENT 或 INSUFFICIENT: <缺失信息描述>
+节点6: refine_query（仅当 sufficient==False 且 retry_count < 3）
+输入：original_question + missing_information
+
+输出：new_query (字符串)
+
+行为：
+
+调用LLM将 missing_information 转换为一个新的检索查询。例如：
+原问题：“2022年研发支出”，缺失信息：“缺少具体数字”
+生成新查询：“2022 R&D spending amount”
+
+该查询将被送入 retrieve 节点。
+
+节点7: generate_answer
+输入：question + accumulated_chunks
+
+输出：final_answer (字符串)
+
+行为：
+
+调用LLM，提示词要求 只根据提供的文档片段回答，不能编造。如果片段中没有答案，必须说“没有找到相关信息”。
+
+同时要求LLM在答案末尾附上引用来源的 chunk_id。
+
+4. 工作流图（精确路由规则）
+text
+start → classify_intent
+classify_intent → [intent]
+  - unclear → ask_clarification → end
+  - simple → retrieve (query = original question) → check_sufficiency
+  - multi_hop → plan_sub_questions → 设 current_sub_idx = 0, accumulated_chunks = [] → retrieve (query = sub_questions[0]) → check_sufficiency
+
+check_sufficiency:
+  - if sufficient == True:
+      - 如果是 simple 路线 → generate_answer → end
+      - 如果是 multi_hop 路线：
+          - 将本次检索到的chunks加入 accumulated_chunks
+          - current_sub_idx += 1
+          - if current_sub_idx < len(sub_questions):
+              retrieve (query = sub_questions[current_sub_idx]) → check_sufficiency
+          - else:
+              generate_answer (使用 accumulated_chunks 回答原问题) → end
+  - if sufficient == False:
+      - retry_count += 1
+      - if retry_count < 3:
+          refine_query → retrieve (query = new_query) → check_sufficiency
+      - else:
+          generate_answer (但必须在答案中声明：“信息不足，无法完整回答”) → end
+5. 数据准备要求
+从 veracier-industries 数据集中提取所有文本块，为每个块生成唯一 ID（格式 doc_{index}）。
+
+每个块必须包含元数据：source_file, page（如果可用）。
+
+将文本块保存为两个文件：
+
+chunks.jsonl：每一行 {"chunk_id": "...", "text": "...", "metadata": {...}}
+
+向量索引文件（FAISS）和 BM25 索引文件（pickle）
+
+6. 成功标准（可量化）
+指标	目标值	测试方法
+简单问题命中率	≥80%	从EDITH中抽取20个simple问题，人工或自动比对答案是否包含关键事实
+多跳问题完整回答率	≥60%	抽取10个需要至少2步推理的问题，检查最终答案是否包含所有必要信息
+主动澄清率	当意图为 unclear 时，100% 输出澄清问题	输入3个模糊问题（如“那家公司怎么样？”），检查是否进入clarification分支
+不编造率	100%	在所有测试中，如果信息不足且retry_count≥3，必须声明“信息不足”，不得编造
+7. 交付物（MVP必须包含的代码文件）
+data_prepare.py – 读取原始parquet，生成chunks.jsonl和索引。
+
+retriever.py – 实现 hybrid_search(query, top_k=5) -> List[RetrievedChunk]
+
+workflow.py – 实现LangGraph图，包含上述所有节点和状态定义。
+
+main.py – 命令行入口，接收问题，输出JSON结果。
+
+test_mvp.py – 运行成功标准中的测试用例，打印通过率。
+

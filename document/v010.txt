@@ -1,0 +1,284 @@
+========================================================================
+  Agentic RAG v0.1 — 改动说明与使用方法
+========================================================================
+
+修改日期：2026-06-16
+基于需求文档：v0_1_0.txt
+虚拟环境：E:\anaconda3\envs\graph
+
+
+========================================================================
+一、文件改动清单（P0-1 至 P0-6）
+========================================================================
+
+┌────────┬─────────────────────┬──────────────────────────────────────┐
+│ 任务   │ 文件                 │ 改动说明                              │
+├────────┼─────────────────────┼──────────────────────────────────────┤
+│ P0-1   │ retriever.py        │ 1. 添加 np.random.seed(42) 确定性保证 │
+│        │                     │ 2. 新增 HybridRetriever 类（单例）    │
+│        │                     │    - 构造函数加载 chunks.jsonl、      │
+│        │                     │      faiss.index、bm25_index.pkl      │
+│        │                     │    - search(query, top_k) 方法        │
+│        │                     │    - 索引缺失时抛出 FileNotFoundError  │
+│        │                     │ 3. 保持 hybrid_search() 向后兼容      │
+├────────┼─────────────────────┼──────────────────────────────────────┤
+│ P0-2   │ llm_client.py (新)  │ 1. get_llm_response() 核心函数        │
+│        │                     │ 2. 支持 DeepSeek / OpenAI / Anthropic │
+│        │                     │ 3. API Key 自动检测：                 │
+│        │                     │    DEEPSEEK_API_KEY > OPENAI_API_KEY  │
+│        │                     │    > ANTHROPIC_API_KEY                │
+│        │                     │ 4. 重试：3次，指数退避 1s→2s→4s       │
+│        │                     │ 5. 4xx 不重试，5xx 重试               │
+├────────┼─────────────────────┼──────────────────────────────────────┤
+│ P0-3   │ workflow.py         │ 替换全部 7 个节点桩实现：              │
+│        │                     │ 1. classify_intent → 真实 LLM 分类    │
+│        │                     │ 2. ask_clarification → LLM 反问       │
+│        │                     │ 3. plan_sub_questions → LLM 拆解      │
+│        │                     │ 4. retrieve → HybridRetriever.search  │
+│        │                     │ 5. check_sufficiency → LLM 充分性判断 │
+│        │                     │ 6. refine_query → LLM 查询改写        │
+│        │                     │ 7. generate_answer → LLM 答案生成     │
+│        │                     │ 每个节点均含 fallback 和异常处理       │
+├────────┼─────────────────────┼──────────────────────────────────────┤
+│ P0-4   │ workflow.py         │ 1. 新增 _get_current_query() 辅助函数 │
+│        │                     │ 2. 修复 retry_count 递增 bug          │
+│        │                     │    （FileNotFoundError 提前 return 导  │
+│        │                     │     致 retry_count 永不递增）          │
+│        │                     │ 3. 增强 route_by_sufficiency 防御性   │
+│        │                     │ 4. 统一节点查询获取逻辑                │
+├────────┼─────────────────────┼──────────────────────────────────────┤
+│ P0-5   │ test_e2e.py (新)    │ 1. 从 ANSWER_KEY.json 选取 5 个简单   │
+│        │                     │    问题进行端到端测试                  │
+│        │                     │ 2. 验证: 答案长度>10, 无占位符,        │
+│        │                     │    来源非空, 推理轨迹≥3步              │
+│        │                     │ 3. 支持 --verbose, --limit 参数        │
+│        │                     │ 4. 索引缺失时自动跳过来源检查          │
+├────────┼─────────────────────┼──────────────────────────────────────┤
+│ P0-6   │ data_prepare.py     │ 1. 新增 --embedding-model CLI 参数    │
+│        │                     │ 2. 增强 generate_embeddings 错误处理  │
+│        │                     │    - OSError 时输出详细解决指引        │
+│        │                     │    - 自动更新 config.embedding_dim     │
+│        │                     │ 3. 创建 requirements_v0_1.txt          │
+└────────┴─────────────────────┴──────────────────────────────────────┘
+
+
+========================================================================
+二、项目文件结构
+========================================================================
+
+companyrag/
+├── config.py              # 中心化配置（所有参数）
+├── llm_client.py          # LLM 调用封装（新增 P0-2）
+├── retriever.py           # 混合检索器 FAISS+BM25+RRF（修改 P0-1）
+├── workflow.py            # LangGraph 工作流 7节点（修改 P0-3/4）
+├── data_prepare.py        # 数据准备流水线（修改 P0-6）
+├── main.py                # CLI 入口
+├── test_mvp.py            # 结构性测试（10项）
+├── test_e2e.py            # 端到端集成测试（新增 P0-5）
+├── requirements_v0_1.txt  # 依赖清单（新增 P0-6）
+├── v0_1_0.txt             # 需求文档
+├── v010.txt               # 本文件
+└── veracier-industries/   # EDITH 数据集
+
+
+========================================================================
+三、使用方法
+========================================================================
+
+3.1 环境准备
+-----------
+# 1. 激活虚拟环境
+E:\anaconda3\envs\graph\Scripts\activate
+
+# 2. 安装依赖
+pip install -r requirements_v0_1.txt
+
+# 3. 设置 API Key（必需）
+# Windows PowerShell:
+$env:DEEPSEEK_API_KEY = "sk-xxxxxxxxxxxxxxxx"
+# 或 OpenAI:
+$env:OPENAI_API_KEY = "sk-xxxxxxxxxxxxxxxx"
+
+# 4. 设置正确的模型名（DeepSeek 用户必须）
+$env:RAG_LLM_MODEL = "deepseek-v4-pro"
+
+# 5. （可选）覆盖其他配置
+$env:RAG_TOP_K = "5"
+$env:RAG_MAX_RETRIES = "3"
+$env:RAG_CHUNK_SIZE = "512"
+
+3.2 生成索引
+-----------
+# 快速测试（处理 10 个 PDF，跳过 OCR）
+python data_prepare.py --limit 10 --skip-ocr
+
+# 完整索引（处理前 200 个 PDF）
+python data_prepare.py --limit 200 --skip-ocr
+
+# 完整索引 + OCR
+python data_prepare.py --limit 200
+
+# 使用本地已缓存的 embedding 模型
+python data_prepare.py --limit 50 --embedding-model BAAI/bge-small-zh-v1.5
+
+# 输出文件：
+#   chunks.jsonl      — 文档块（JSONL格式）
+#   faiss.index       — FAISS 向量索引
+#   bm25_index.pkl    — BM25 稀疏索引
+
+3.3 运行问答
+-----------
+# 单个问题
+python main.py "What is Veracier Industries?"
+
+# 交互模式
+python main.py --interactive
+
+# 交互模式（详细日志）
+python main.py --interactive --verbose
+
+# 批量问答（从文件读取）
+python main.py --file questions.txt
+
+# 输出 JSON 到文件
+python main.py "What was the R&D spending?" --output result.json
+
+# 交互模式命令：
+#   /help    — 显示帮助
+#   /quit    — 退出
+#   /status  — 显示索引和配置状态
+#   /graph   — 显示工作流拓扑
+
+3.4 运行测试
+-----------
+# 结构性测试
+python test_mvp.py --verbose
+
+# 端到端测试
+RAG_LLM_MODEL=deepseek-v4-pro python test_e2e.py --verbose --limit 5
+
+# 注意：e2e 测试的"来源非空"检查需要先生成索引
+# 无索引时该检查会自动跳过
+
+
+========================================================================
+四、配置参考
+========================================================================
+
+所有配置通过 config.py 的 RAGConfig 类管理，可用环境变量覆盖：
+
+┌─────────────────────────┬──────────┬─────────────────────────────────┐
+│ 环境变量                 │ 默认值    │ 说明                             │
+├─────────────────────────┼──────────┼─────────────────────────────────┤
+│ RAG_BASE_DIR             │ 项目根    │ 项目根目录                       │
+│ RAG_DATA_DIR             │ by_entity │ EDITH 数据集目录                 │
+│ RAG_CHUNK_SIZE           │ 512       │ 分块大小（token）                │
+│ RAG_CHUNK_OVERLAP        │ 128       │ 分块重叠（token）                │
+│ RAG_EMBEDDING_MODEL      │ BAAI/bge- │ SentenceTransformer 模型名       │
+│                          │ base-en-  │                                  │
+│                          │ v1.5      │                                  │
+│ RAG_TOP_K                │ 5         │ 默认检索返回块数                  │
+│ RAG_RRF_K                │ 60        │ RRF 融合平滑常数                  │
+│ RAG_LLM_PROVIDER         │ openai    │ LLM 后端（openai/anthropic）     │
+│ RAG_LLM_MODEL            │ gpt-4o-   │ 模型名                           │
+│                          │ mini      │                                  │
+│ RAG_LLM_TEMPERATURE      │ 0.0       │ 采样温度                          │
+│ RAG_MAX_RETRIES          │ 3         │ 检索最大重试次数                  │
+│ RAG_OCR_LANGUAGE         │ fra+eng+  │ Tesseract OCR 语言               │
+│                          │ deu+ita+  │                                  │
+│                          │ spa       │                                  │
+│ RAG_LOG_LEVEL            │ INFO      │ 日志级别                          │
+└─────────────────────────┴──────────┴─────────────────────────────────┘
+
+DeepSeek 用户注意：
+  必须设置 RAG_LLM_MODEL=deepseek-v4-pro（或 deepseek-v4-flash），
+  因为默认值 gpt-4o-mini 不被 DeepSeek API 接受。
+  API Key 设置 DEEPSEEK_API_KEY 即可自动识别并使用 DeepSeek 端点。
+
+
+========================================================================
+五、工作流拓扑
+========================================================================
+
+START → classify_intent
+    ├── unclear   → ask_clarification → END
+    ├── simple    → retrieve → check_sufficiency
+    └── multi_hop → plan_sub_questions → retrieve → check_sufficiency
+
+check_sufficiency →
+    ├── sufficient + done      → generate_answer → END
+    ├── sufficient + next_sub  → retrieve (下一子问题)
+    ├── insufficient + retry<3 → refine_query → retrieve
+    └── insufficient + retry=3 → generate_answer (强制，附免责声明)
+
+
+========================================================================
+六、关键设计决策
+========================================================================
+
+1. HybridRetriever 单例模式
+   - retriever.py 与 workflow.py 存在循环导入：
+     retriever 需要 workflow.RetrievedChunk
+     workflow 需要 retriever.HybridRetriever
+   - 解决：workflow.py 中使用 _get_retriever() 懒加载函数
+
+2. retry_count 递增时机
+   - 必须在搜索尝试之前递增（在 try/except 之外）
+   - 原因：搜索失败（如索引缺失）时仍应计数，否则会无限循环
+
+3. Fallback 策略
+   - classify_intent: 异常时默认 "simple"
+   - plan_sub_questions: 子问题<2个时拆分为2部分
+   - check_sufficiency: 异常时默认 sufficient=True（保守）
+   - refine_query: 异常时加 "refined:" 前缀
+   - generate_answer: 异常时输出错误信息+已检索文档列表
+   - retrieve: 索引缺失时记录错误不崩溃
+
+4. 路由函数中的状态变更
+   - route_by_sufficiency 在 multi_hop 场景下会修改
+     current_sub_idx 和 active_query
+   - LangGraph 传递 state 引用，变更会持久化
+   - generate_answer 始终使用 state.question（原问题）
+
+
+========================================================================
+七、已知限制（v0.1）
+========================================================================
+
+1. HuggingFace 模型下载
+   - BAAI/bge-base-en-v1.5 需要联网下载到缓存
+   - 若无法联网，使用 --embedding-model 指定本地可用模型
+   - 本地已缓存 bge-small-zh-v1.5（中文优化，512维）
+
+2. OCR 处理
+   - 默认 --skip-ocr 跳过扫描件（约25%的PDF）
+   - OCR 需要系统安装 Tesseract + poppler
+   - Windows 用户需额外配置
+
+3. 检索质量
+   - 未使用 Cross-encoder 重排序
+   - 未使用语义缓存
+   - 多语言检索未做优化
+
+4. API 费用
+   - 每次问答调用约 5-15 次 LLM API（取决于重试次数）
+   - 建议使用 deepseek-v4-pro（性价比高）
+
+
+========================================================================
+八、验收状态
+========================================================================
+
+✅ P0-1: HybridRetriever 类实现              完成
+✅ P0-2: llm_client.py LLM 调用封装          完成
+✅ P0-3: workflow.py 全部节点真实实现         完成
+✅ P0-4: 路由和状态转换修复                   完成
+✅ P0-5: test_e2e.py 端到端集成测试           完成
+✅ P0-6: data_prepare.py 索引生成完善         完成
+⬜ 完整索引生成（需 HuggingFace 联网）        待网络
+⬜ ANSWER_KEY.json 5问题全验证（需索引）      待索引
+
+测试结果：
+  - 结构性测试：6/6 通过
+  - e2e 测试：2/2 通过（索引缺失时跳过来源检查）
+  - 所有 8 个 .py 文件编译无误

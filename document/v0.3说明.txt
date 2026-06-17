@@ -1,0 +1,338 @@
+========================================================================
+  Agentic RAG v0.3 — Gradio 可视化界面 说明文档
+========================================================================
+
+版本：v0.3
+日期：2026-06-16
+基于：v0.2（核心引擎 + 索引 + e2e 测试）
+虚拟环境：E:\anaconda3\envs\graph
+
+
+========================================================================
+一、v0.3 新增功能概述
+========================================================================
+
+在 v0.2 稳固基础上，新增 Gradio Web 可视化交互界面，实现：
+
+┌──────────────────────────────────────────────────────────────────┐
+│ ✅ 图形化聊天问答（gr.Chatbot）                                   │
+│ ✅ 实时推理轨迹流式展示（逐节点可视化）                            │
+│ ✅ 检索文档来源预览（chunk_id + 文件路径 + 文本片段）             │
+│ ✅ 核心参数可视化调节（Top-K / Temperature 滑块）                 │
+│ ✅ 一键生成公网演示链接（share=True）                             │
+│ ✅ LLM 流式输出（逐 token 推送，非一次性加载）                    │
+│ ✅ 工作流流式包装器（run_workflow_streaming 生成器）              │
+│ ✅ 运行时配置覆盖（config_override 字典）                          │
+└──────────────────────────────────────────────────────────────────┘
+
+
+========================================================================
+二、文件改动清单
+========================================================================
+
+┌──────────┬─────────────────────┬────────────────────────────────────┐
+│ 任务      │ 文件                 │ 改动说明                           │
+├──────────┼─────────────────────┼────────────────────────────────────┤
+│ P0-1     │ llm_client.py       │ 新增 get_llm_response_stream()     │
+│          │                     │ - 生成器函数，逐 token yield        │
+│          │                     │ - 支持 OpenAI/DeepSeek stream=True  │
+│          │                     │ - 支持 callback 回调                │
+│          │                     │ - Anthropic 回退到非流式            │
+├──────────┼─────────────────────┼────────────────────────────────────┤
+│ P0-2     │ workflow.py         │ 新增 run_workflow_streaming()      │
+│          │                     │ - 生成器函数，yield 3种事件:        │
+│          │                     │   {"type":"node", ...}  节点事件    │
+│          │                     │   {"type":"token", ...} token事件   │
+│          │                     │   {"type":"done", ...}  完成事件    │
+│          │                     │ - 支持 config_override 参数覆盖     │
+│          │                     │ - 手动编排节点（非 graph.stream）   │
+│          │                     │ 新增 _runtime_config 全局配置       │
+│          │                     │ 新增 _get_runtime_config() 辅助     │
+│          │                     │ retrieve/route/generate 使用运行时   │
+│          │                     │ 配置替代硬编码 config.xxx            │
+├──────────┼─────────────────────┼────────────────────────────────────┤
+│ P0-3     │ app_gradio.py (新)  │ Gradio Blocks 左右两栏布局:         │
+│          │                     │ 左栏: Chatbot + 输入框 + 发送按钮   │
+│          │                     │ 右栏: 推理轨迹 + 检索来源 + 参数    │
+│          │                     │ - 流式更新（每 token 实时刷新）     │
+│          │                     │ - 警告横幅（索引/API缺失）          │
+│          │                     │ - share=True 公网链接               │
+│          │                     │ - 兼容 Gradio 6.x API               │
+├──────────┼─────────────────────┼────────────────────────────────────┤
+│ P0-4     │ config.py           │ 新增 streaming_enabled (默认 True)  │
+│          │                     │ 新增 from_dict(overrides) 方法      │
+│          │                     │ - 深拷贝 + 属性覆盖                  │
+│          │                     │ - 不修改原始 config 单例             │
+├──────────┼─────────────────────┼────────────────────────────────────┤
+│ P0-5     │ requirements_v0_1   │ 添加 gradio>=4.0.0                  │
+│          │ app_gradio.py       │ 内建：索引缺失警告、API Key 检测    │
+│          │                     │ 120 秒超时可在 launch() 中配置      │
+└──────────┴─────────────────────┴────────────────────────────────────┘
+
+
+========================================================================
+三、使用方法
+========================================================================
+
+3.1 启动 Gradio 界面
+-------------------
+# 完整启动命令（需要设置环境变量）
+RAG_LLM_MODEL=deepseek-v4-pro \
+RAG_EMBEDDING_MODEL="E:/agentProject/embedding-model/bge-base-en-v1.5" \
+python app_gradio.py
+
+# PowerShell:
+$env:RAG_LLM_MODEL = "deepseek-v4-pro"
+$env:RAG_EMBEDDING_MODEL = "E:/agentProject/embedding-model/bge-base-en-v1.5"
+python app_gradio.py
+
+# 启动后输出:
+# ============================================================
+#   Agentic RAG v0.3 — Gradio Web UI
+# ============================================================
+#   Embedding model: E:/agentProject/embedding-model/bge-base-en-v1.5
+#   LLM: openai:deepseek-v4-pro
+#   Index: [OK]
+#   Chunks: 558
+#
+# Running on local URL:  http://127.0.0.1:7860
+# Running on public URL: https://xxxxx.gradio.live
+
+
+3.2 界面操作
+-----------
+1. 浏览器打开 http://127.0.0.1:7860
+2. 在底部输入框输入问题，按回车或点击"发送"
+3. 观察：
+   - 左侧对话区：答案逐字出现
+   - 右侧推理轨迹：逐节点显示 Agent 决策过程
+   - 展开"检索来源"：查看检索到的文档块
+4. 调整 Top-K 滑块（1-20）和 Temperature 滑块（0-1）
+   下次提问时生效
+5. 点击"清空对话"重置界面
+
+3.3 推理轨迹示例
+---------------
+界面右侧"推理轨迹"面板会实时显示：
+  [classify_intent] 意图分类完成: simple
+  [retrieve] 正在检索: What is Veracier Industries?...
+  [retrieve] 检索到 5 个相关文档块
+  [check_sufficiency] 正在判断信息是否足够...
+  [check_sufficiency] ✅ 信息足够，开始生成答案
+  [generate_answer] 正在生成答案...
+  [done] Answer: 708 chars, Sources: 10
+
+
+3.4 错误处理
+-----------
+界面内置以下错误提示：
+
+┌──────────────────────┬────────────────────────────────────────┐
+│ 场景                  │ 界面表现                               │
+├──────────────────────┼────────────────────────────────────────┤
+│ 索引文件缺失          │ 顶部黄色警告横幅 + 答案中显示运行命令  │
+│ API Key 未设置        │ 顶部红色横幅 + 答案中显示配置指引      │
+│ LLM 调用失败          │ 答案中显示具体错误信息                  │
+│ 工作流异常            │ 答案中显示异常堆栈（开发模式）         │
+└──────────────────────┴────────────────────────────────────────┘
+
+
+========================================================================
+四、新增 API 参考
+========================================================================
+
+4.1 config.from_dict()
+---------------------
+from config import config
+
+# 创建覆盖了 top_k 和 temperature 的新配置
+custom = config.from_dict({"top_k": 10, "llm_temperature": 0.5})
+# 原始 config 不变，custom 是深拷贝
+
+4.2 get_llm_response_stream()
+-----------------------------
+from llm_client import get_llm_response_stream
+
+# 逐 token 流式输出
+for token in get_llm_response_stream("Say hello"):
+    print(token, end="", flush=True)
+
+# 带 callback
+def on_token(event_type, token):
+    print(f"[{event_type}] {token}")
+
+for token in get_llm_response_stream(
+    "Say hello",
+    system_prompt="Be brief.",
+    temperature=0.5,
+    callback=on_token,
+):
+    pass  # tokens already handled by callback
+
+4.3 run_workflow_streaming()
+----------------------------
+from workflow import run_workflow_streaming
+
+# events 是 generator，每个 event 是 dict
+for event in run_workflow_streaming(
+    "What is Veracier?",
+    config_override={"top_k": 5, "llm_temperature": 0.2},
+):
+    etype = event["type"]
+    if etype == "node":
+        print(f"[{event['node']}] {event['message']}")
+    elif etype == "token":
+        print(event["content"], end="", flush=True)
+    elif etype == "done":
+        print(f"\nAnswer: {event['final_answer'][:100]}...")
+        print(f"Sources: {event['retrieved_sources']}")
+
+
+========================================================================
+五、事件数据结构
+========================================================================
+
+run_workflow_streaming 产出的 3 种事件：
+
+5.1 node 事件
+{
+    "type": "node",
+    "node": "classify_intent",        # 节点名
+    "message": "意图分类完成: simple",  # 中文用户消息
+    "detail": "simple"                 # 详细结果值
+}
+
+5.2 token 事件
+{
+    "type": "token",
+    "content": "Veracier",            # 单个 token
+    "accumulated": "Veracier Indu..."  # 已累积的完整答案
+}
+
+5.3 done 事件
+{
+    "type": "done",
+    "final_answer": "Based on the...", # 完整答案（含引用）
+    "retrieved_sources": ["doc_0", ...],  # 使用的 chunk_id 列表
+    "retrieved_chunks": [             # chunk 详情（供来源面板）
+        {
+            "chunk_id": "doc_124",
+            "text": "...",            # 前 200 字符
+            "source_file": "veracier_sa/xxx.pdf",
+            "score": 0.0255
+        }
+    ],
+    "reasoning_trace": [...],         # 完整推理轨迹
+    "intent": "simple"
+}
+
+
+========================================================================
+六、兼容性说明
+========================================================================
+
+6.1 已有功能保持
+  ✅ main.py CLI 问答不受影响
+  ✅ test_mvp.py 结构性测试不受影响
+  ✅ test_e2e.py 端到端测试不受影响
+  ✅ HybridRetriever 单例模式不变（Gradio 多请求共享）
+  ✅ data_prepare.py 索引生成不受影响
+
+6.2 Gradio 版本
+  - 安装了 gradio 6.18.0（最新版）
+  - 已适配 Gradio 6.x API 变更：
+    · theme/css 从 Blocks() 移至 launch()
+    · Chatbot 移除 type/height 参数
+  - 如需降级到 Gradio 4.x/5.x，恢复参数即可
+
+6.3 环境变量
+  运行时必须设置（否则索引/LLM不可用）：
+    RAG_EMBEDDING_MODEL=E:/agentProject/embedding-model/bge-base-en-v1.5
+    RAG_LLM_MODEL=deepseek-v4-pro
+    DEEPSEEK_API_KEY=sk-xxx
+
+
+========================================================================
+七、最终验收结果（2026-06-16 实测）
+========================================================================
+
+测试环境：
+  LLM: deepseek-v4-pro (via DeepSeek API)
+  Embedding: E:/agentProject/embedding-model/bge-base-en-v1.5 (本地)
+  Index: 558 chunks (150 PDFs)
+  Gradio: 6.18.0
+
+┌────────┬──────────────────────────────┬──────┬─────────────────────────┐
+│ 任务    │ 验收标准                      │ 状态  │ 实测数据                 │
+├────────┼──────────────────────────────┼──────┼─────────────────────────┤
+│ P0-1   │ 流式逐 token 输出            │ ✅   │ "hello" 1 token 输出     │
+│ P0-2   │ 事件列表 >= 10               │ ✅   │ 203 events              │
+│        │ 最后事件类型 = done           │ ✅   │ type="done"             │
+│        │ 答案长度 > 10                 │ ✅   │ >10 chars               │
+│        │ 来源 >= 1                     │ ✅   │ 3 retrieved_sources     │
+├────────┼──────────────────────────────┼──────┼─────────────────────────┤
+│ P0-3   │ Gradio 启动无报错             │ ✅   │ build_ui() + queue() 正常│
+│        │ 浏览器可访问                  │ ✅   │ localhost:7860 响应 200  │
+│        │ share=True 公网链接           │ ✅   │ tunnel-request 200 OK   │
+├────────┼──────────────────────────────┼──────┼─────────────────────────┤
+│ P0-4   │ from_dict() 深拷贝           │ ✅   │ 修改不影响原始 config    │
+│        │ top_k 滑块覆盖生效            │ ✅   │ top_k=3 → 初始3个chunk   │
+│        │ streaming_enabled=True        │ ✅   │ 默认开启                 │
+│        │ _get_runtime_config() 可用    │ ✅   │ 返回覆盖后配置            │
+├────────┼──────────────────────────────┼──────┼─────────────────────────┤
+│ P0-5   │ 索引缺失 → 警告横幅           │ ✅   │ warning-banner 显示       │
+│        │ API Key缺失 → 错误捕获        │ ✅   │ handle_user_message 捕获  │
+│        │ 异常不崩溃                     │ ✅   │ 工作流优雅降级            │
+│        │ done 事件包含所有必需键        │ ✅   │ 6 个必需键全部存在        │
+├────────┴──────────────────────────────┴──────┴─────────────────────────┤
+│ 兼容性:                                                               │
+│   ✅ 9/9 .py 文件编译通过                                              │
+│   ✅ 结构测试 6/6 通过 (test_mvp.py)                                   │
+│   ✅ e2e 测试 3/3 通过 (test_e2e.py)                                   │
+│   ✅ main.py CLI 功能不受影响                                           │
+│   ✅ HybridRetriever 单例模式不变                                       │
+└────────────────────────────────────────────────────────────────────────┘
+
+典型事件流（"What is Veracier?"，top_k=3）:
+  203 events 总计:
+    13 node events  (classify_intent ×2, retrieve ×4, check_sufficiency ×4,
+                     refine_query ×2, generate_answer ×1)
+    189 token events (逐字流式输出)
+    1 done event    (final_answer + sources + chunks + trace)
+
+
+========================================================================
+八、已知限制
+========================================================================
+
+1. Gradio 6.x Chatbot 不支持 type="messages"（标准格式仍可用）
+2. 推理轨迹中文在 Windows GBK 终端可能乱码（浏览器中正常显示）
+3. 公网链接需网络畅通（share=True 通过 gradio.live 隧道）
+4. 120 秒超时未硬编码（Gradio queue 默认无超时）
+5. 多用户并发通过 demo.queue() 排队，无独立会话管理
+
+
+========================================================================
+九、文件清单
+========================================================================
+
+E:\agentProject\companyrag\
+├── config.py              # +streaming_enabled, +from_dict()
+├── llm_client.py          # +get_llm_response_stream()
+├── workflow.py            # +run_workflow_streaming(), +_runtime_config
+├── app_gradio.py          # 新增: Gradio Web UI
+├── retriever.py           # 不变
+├── data_prepare.py        # 不变
+├── main.py                # 不变
+├── test_mvp.py            # 不变
+├── test_e2e.py            # 不变
+├── requirements_v0_1.txt  # +gradio>=4.0.0
+├── v0_1_0.txt             # 原始需求
+├── v010.txt               # v0.1 说明
+├── v020.txt               # v0.2 说明
+├── v0.3需求.txt            # v0.3 需求
+├── v0.3说明.txt            # 本文件
+├── chunks.jsonl           # 558 chunks
+├── faiss.index            # 558×768 FAISS
+├── bm25_index.pkl         # 558 docs BM25
+└── veracier-industries/   # EDITH 数据集
