@@ -1,5 +1,18 @@
 # Changelog
 
+## [v0.6.0] — 2026-06-20
+
+### Added
+- **多轮对话上下文**: `RAGState` 新增 `conversation_history` 字段，`generate_answer` 自动注入最近 3 轮对话到 prompt，支持追问、指代消解
+- **答案来源可追溯**: 答案中 `[doc_xxx]` 自动替换为 `[来源N]`，对应检索来源面板的编号列表，一眼定位每句话的出处
+- **UI 来源面板美化**: 来源条目改为盒装格式（得分 + 文件路径 + 内容预览）
+
+### Changed
+- `run_rag()` 和 `run_workflow_streaming()` 新增 `conversation_history` 参数
+- Gradio `handle_user_message` 自动从 Chatbot 历史中提取上下文传给流水线
+
+---
+
 ## [v0.5.0] — 2026-06-19
 
 ### Added

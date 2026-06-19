@@ -839,15 +839,27 @@ def generate_answer(state: RAGState) -> RAGState:
         else:
             formatted_chunks = "(No documents retrieved)"
 
+        # ---- 多轮对话上下文 (v0.6) ----
+        history_text = ""
+        if state.conversation_history:
+            recent = state.conversation_history[-6:]  # 最近 3 轮（6条消息）
+            history_lines = []
+            for msg in recent:
+                role = "用户" if msg.get("role") == "user" else "助手"
+                history_lines.append(f"{role}: {msg.get('content', '')}")
+            if history_lines:
+                history_text = "\n".join(history_lines) + "\n\n"
+
         prompt = (
             "Based on the following document excerpts, answer the user's question.\n"
             "Do not fabricate any information. If the answer is not found in the documents, "
             "explicitly say \"No relevant information found\".\n"
             "After each cited sentence, append its source ID in brackets (e.g., [doc_5]).\n\n"
+            "{history}"
             "Document excerpts:\n{chunks}\n\n"
             "Question: {question}\n\n"
             "Answer:"
-        ).format(chunks=formatted_chunks, question=state.question)
+        ).format(history=history_text, chunks=formatted_chunks, question=state.question)
 
         system_prompt = (
             "You are a corporate knowledge base assistant. Answer questions ONLY based on "
@@ -855,6 +867,8 @@ def generate_answer(state: RAGState) -> RAGState:
             "after each sentence that uses information from a specific document. "
             "If the documents don't contain the answer, say so clearly. "
             "Do not make up facts."
+            + (" The conversation history above provides context for follow-up questions."
+               if state.conversation_history else "")
         )
 
         answer = get_llm_response(prompt, system_prompt=system_prompt)
@@ -1189,22 +1203,16 @@ def get_graph() -> StateGraph:
 # Convenience: run the graph end-to-end
 # =============================================================================
 
-def run_rag(question: str) -> dict:
+def run_rag(question: str, conversation_history: Optional[List[Dict[str, str]]] = None) -> dict:
     """Run the full Agentic RAG pipeline for a single question.
-
-    Convenience wrapper that initializes state, invokes the graph,
-    and returns a JSON-serializable result dict.
 
     Args:
         question: Natural language question string.
+        conversation_history: Optional list of prior turns for multi-turn context.
+            Each dict: {"role": "user"|"assistant", "content": "..."}
 
     Returns:
-        Dict with keys:
-            - answer: str — the final answer
-            - reasoning_trace: List[str] — step-by-step decision log
-            - retrieved_sources: List[str] — chunk_ids used in the answer
-            - intent: str — classified intent
-            - final_state: dict — the complete final RAGState as dict
+        Dict with keys: answer, reasoning_trace, retrieved_sources, intent, final_state
     """
     # ---- 两级缓存检查 (v0.5): L1 精确 → L2 语义 ----
     if config.cache_enabled:
@@ -1234,7 +1242,7 @@ def run_rag(question: str) -> dict:
 
     graph = get_graph()
 
-    initial_state = RAGState(question=question)
+    initial_state = RAGState(question=question, conversation_history=conversation_history or [])
     logger.info(f"Starting RAG pipeline for: '{question[:80]}...'")
 
     final_state = graph.invoke(initial_state)
@@ -1307,15 +1315,14 @@ def _get_runtime_config() -> "RAGConfig":
 def run_workflow_streaming(
     question: str,
     config_override: Optional[Dict[str, Any]] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """使用 LangGraph astream_events 流式执行 RAG 流水线。
-
-    关键改进：不再手写 300 行节点调度循环，改为监听编译好的
-    LangGraph 图发出的原生事件。修改节点逻辑后无需同步更新此函数。
 
     Args:
         question: 用户问题
         config_override: 可选配置覆盖
+        conversation_history: 多轮对话上下文 (v0.6)
 
     Yields:
         与旧版完全兼容的 dict 事件: node / token / done
@@ -1327,7 +1334,7 @@ def run_workflow_streaming(
     else:
         _runtime_config = config
 
-    initial_state = RAGState(question=question)
+    initial_state = RAGState(question=question, conversation_history=conversation_history or [])
     accumulated_answer = ""
 
     # 节点 → 中文提示词

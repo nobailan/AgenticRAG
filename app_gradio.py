@@ -81,7 +81,15 @@ def handle_user_message(
         (history, trace_text, sources_display, msg_input_value) tuples.
         The 4th value clears the input box on the first yield.
     """
-    # Build config overrides from UI sliders
+    # ---- 多轮对话上下文 (v0.6) ----
+    # 从 Gradio history 中提取最近 3 轮作为对话上下文
+    conversation_history = []
+    if history and len(history) >= 2:
+        # history 按时间顺序排列，最后一条是当前用户消息（刚 append 的）
+        # 取之前的最多 6 条（3 轮）
+        recent = history[:-1] if len(history) > 0 else []
+        conversation_history = recent[-6:]
+
     config_override = {
         "top_k": int(top_k),
         "llm_temperature": float(temperature),
@@ -100,7 +108,11 @@ def handle_user_message(
     history.append({"role": "assistant", "content": ""})
 
     try:
-        for event in run_workflow_streaming(message, config_override=config_override):
+        for event in run_workflow_streaming(
+            message,
+            config_override=config_override,
+            conversation_history=conversation_history,
+        ):
             etype = event.get("type", "")
 
             if etype == "node":
@@ -120,28 +132,51 @@ def handle_user_message(
 
             elif etype == "done":
                 final_answer = event.get("final_answer", "")
-                # 缓存命中标记 (v0.5)
-                cache_type = event.get("cache_type", "")
-                if cache_type == "exact":
-                    history[-1]["content"] = final_answer + "\n\n---\n✅ 命中精确缓存"
-                elif cache_type == "semantic":
-                    history[-1]["content"] = final_answer + "\n\n---\n🔍 命中语义缓存"
-                else:
-                    history[-1]["content"] = final_answer
-
-                # Format sources
                 chunks = event.get("retrieved_chunks", [])
+
+                # ---- 来源编号映射 (v0.6) ----
+                # 将 [doc_xxx] 替换为 [N] 便于阅读，N 对应下方来源列表
+                import re as _re
+                chunk_id_to_num = {}
                 if chunks:
-                    sources_lines = []
+                    for i, c in enumerate(chunks, 1):
+                        cid = c.get("chunk_id", "")
+                        if cid:
+                            chunk_id_to_num[cid] = i
+
+                    # 替换答案中的 [doc_xxx] → [来源N]
+                    def _replace_citation(match):
+                        cid = match.group(1)
+                        num = chunk_id_to_num.get(cid)
+                        return f"[来源{num}]" if num else match.group(0)
+                    final_answer = _re.sub(
+                        r'\[(doc_\d+)\]', _replace_citation, final_answer
+                    )
+
+                # 缓存状态
+                cache_type = event.get("cache_type", "")
+                footer = ""
+                if cache_type == "exact":
+                    footer = "\n\n---\n✅ 命中精确缓存 (L1)"
+                elif cache_type == "semantic":
+                    footer = "\n\n---\n🔍 命中语义缓存 (L2)"
+                history[-1]["content"] = final_answer + footer
+
+                # 来源面板
+                if chunks:
+                    sources_lines = ["═" * 44 + " 检索来源 " + "═" * 44, ""]
                     for i, c in enumerate(chunks, 1):
                         sources_lines.append(
-                            f"[{i}] {c['chunk_id']} | score={c['score']:.4f}\n"
-                            f"    File: {c['source_file']}\n"
-                            f"    Text: {c['text'][:150]}...\n"
+                            f"┌─ [来源{i}] {c['chunk_id']} ─────────────────────────────\n"
+                            f"│ 得分: {c['score']:.4f}  |  文件: {c['source_file']}\n"
+                            f"│ 内容: {c['text'][:200]}...\n"
+                            f"└{'─' * 50}"
                         )
+                    sources_lines.append("")
+                    sources_lines.append(f"共 {len(chunks)} 篇，对应答案中 [来源N] 标记")
                     sources_display = "\n".join(sources_lines)
                 else:
-                    sources_display = "No documents retrieved."
+                    sources_display = "未检索到文档"
 
                 trace_lines.append(f"[done] Answer: {len(final_answer)} chars, "
                                    f"Sources: {len(event.get('retrieved_sources', []))}")

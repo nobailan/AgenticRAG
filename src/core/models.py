@@ -106,12 +106,17 @@ class RAGState(BaseModel):
     reasoning_trace: List[str] = Field(default_factory=list)
     """每一步决策的日志。示例: '[classify_intent] intent=multi_hop'"""
 
+    # ---- 多轮对话 (v0.6) ----
+    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
+    """最近几轮的对话上下文。每项 {"role": "user"|"assistant", "content": "..."}。
+    generate_answer 时注入 prompt，让 LLM 理解前后文。"""
+
     # ---- 多 Agent 协作 (v0.5) ----
     supervisor_plan: str = ""
     """Supervisor 生成的任务执行计划（自然语言）"""
 
     subtasks: List[Dict[str, str]] = Field(default_factory=list)
-    """子任务列表，每项: {"worker_type": "retrieve/critic/synthesize", "description": "..."}"""
+    """子任务列表"""
 
     worker_results: Dict[str, str] = Field(default_factory=dict)
-    """各 Worker 的输出，key = worker_type, value = 结构化结果"""
+    """各 Worker 的输出"""
