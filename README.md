@@ -2,11 +2,13 @@
 
 基于 **LangGraph** 构建的 **Agentic RAG**（检索增强生成）系统，面向企业级文档库的智能问答。数据集采用 Veracier Industries 的约 1,100 份多语言 PDF 文档，涵盖 9 个子公司的财务、法务、技术、生产等业务文件，支持法语（53%）、英语（23%）、德语（10%）、意大利语、西班牙语五种语言。
 
-> **当前版本**: v0.5 · **仓库**: [nobailan/AgenticRAG](https://github.com/nobailan/AgenticRAG)
+> **当前版本**: v0.6 · **仓库**: [nobailan/AgenticRAG](https://github.com/nobailan/AgenticRAG)
 
 ## ✨ 核心亮点
 
 - **8 节点 Agent 工作流** — 意图分类 → 澄清反问 / 多跳拆解 → 混合检索 → **Cross-encoder 精排** → 充分性校验 → 查询改写 → 答案生成，全程透明可追溯
+- **多轮对话上下文** — 自动记住最近 3 轮对话，LLM 能理解"那它的营业额呢？"中的指代关系
+- **答案来源可追溯** — 答案中 `[来源1] [来源2]` 对应检索来源面板的编号条目，每句话的出处一目了然
 - **混合检索 + 精排** — FAISS 稠密向量 + BM25 稀疏检索 + RRF 融合粗排，再用 BAAI/bge-reranker-base 做 cross-encoder 精排，检索精度显著提升
 - **两级语义缓存** — L1 精确缓存（MD5 匹配，< 100ms）+ L2 语义缓存（FAISS 向量相似度，< 200ms），大幅降低重复/相似问题的 LLM 调用成本
 - **多 Agent 协作架构** — Supervisor 调度器 + retriever / critic / synthesizer 三个 Worker，复杂问题多角色协作处理
@@ -267,12 +269,13 @@ python evaluation/evaluate.py --limit 10
 
 ## 🔧 已知限制
 
-- **单轮问答** — 每次提问独立处理，暂不支持多轮对话
+- **多轮对话最多 3 轮** — 超过的历史会被截断，重启后历史丢失
 - **无用户认证** — 单用户模式
 - **语义缓存需 Redis** — 无 Redis 时降级为内存模式（重启丢失）
 - **cross-encoder 需额外安装** — `pip install sentence-transformers`
 - **Embedding 模型** — bge-base-en-v1.5 英文优化，非英语召回率可能偏低
 - **多 Agent 模式** — 基础版，Worker 调度为静态编排
+- **来源编号** — 文本替换，非真正的前端点击跳转
 
 ## 🗺 版本演进
 
@@ -281,6 +284,7 @@ python evaluation/evaluate.py --limit 10
 | v0.3.1 | `main` | 首发版：Gradio UI · 流式输出 · 8,672 chunks |
 | v0.4 | `feature/optimization-june-2026` | 精排 · 语义缓存 · E5 多语言 · RAGAS 评测 · Docker |
 | v0.5 | `feature/v0.5-upgrade` | 两级缓存 · 回归测试/CI · 多 Agent 架构 |
+| v0.6 | `main` | 多轮对话 · 答案溯源 · 暗色 UI · 流式重构 |
 
 ---
 
