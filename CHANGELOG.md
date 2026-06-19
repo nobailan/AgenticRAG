@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.5.0] — 2026-06-19
+
+### Added
+- **两级缓存体系** (`src/cache/exact_cache.py` + `cache_manager.py`): L1 精确缓存（MD5 匹配，<100ms）+ L2 语义缓存（向量相似度，<200ms），统一入口逐级查询
+- **自动化回归测试** (`evaluation/regression_test.py`): 30 题黄金测试集 + 基线对比 + 退化检测（5% 阈值）
+- **CI 流水线** (`.github/workflows/ci.yml`): GitHub Actions 自动运行回归测试，PR 时自动检测性能退化
+- **多 Agent 架构基础版** (`src/agents/supervisor.py` + `workers/`): Supervisor + retriever/critic/synthesizer 三个 Worker，支持复杂问题的协作式处理
+- **缓存状态展示**: Gradio 界面答案区下方显示命中类型（✅ 精确缓存 / 🔍 语义缓存）
+
+### Changed
+- `workflow.py` 的缓存集成从单级语义缓存升级为 cache_manager 两级查询
+- `app_gradio.py` 的 done 事件处理增加 cache_type 显示
+- `RAGState` 增加 `supervisor_plan`、`subtasks`、`worker_results` 字段
+- `build_graph()` 注册了 4 个多 Agent 节点（supervisor, retriever_worker, critic_worker, synthesizer_worker）
+
+---
+
 ## [v0.4.0] — 2026-06-19
 
 ### Added

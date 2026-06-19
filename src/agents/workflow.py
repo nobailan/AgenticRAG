@@ -1096,9 +1096,15 @@ def build_graph() -> StateGraph:
     Returns:
         Compiled LangGraph StateGraph ready for .invoke() with a RAGState dict.
     """
+    # ---- 多 Agent 模式 (v0.5) ----
+    from src.agents.supervisor import supervisor_node
+    from src.agents.workers.retriever_worker import retriever_worker as _ra_worker
+    from src.agents.workers.critic_worker import critic_worker
+    from src.agents.workers.synthesizer_worker import synthesizer_worker
+
     graph = StateGraph(RAGState)
 
-    # ---- Add all nodes (8 with rerank) ----
+    # ---- Add all nodes (8 base + 4 multi-agent) ----
     graph.add_node("classify_intent", classify_intent)
     graph.add_node("ask_clarification", ask_clarification)
     graph.add_node("plan_sub_questions", plan_sub_questions)
@@ -1107,6 +1113,11 @@ def build_graph() -> StateGraph:
     graph.add_node("check_sufficiency", check_sufficiency)
     graph.add_node("refine_query", refine_query)
     graph.add_node("generate_answer", generate_answer)
+    # 多 Agent 节点（仅在 multi_agent_enabled 时参与路由）
+    graph.add_node("supervisor", supervisor_node)
+    graph.add_node("retriever_worker", _ra_worker)
+    graph.add_node("critic_worker", critic_worker)
+    graph.add_node("synthesizer_worker", synthesizer_worker)
 
     # ---- Entry point ----
     graph.set_entry_point("classify_intent")
@@ -1195,29 +1206,31 @@ def run_rag(question: str) -> dict:
             - intent: str — classified intent
             - final_state: dict — the complete final RAGState as dict
     """
-    # ---- Semantic cache check (v0.4) ----
+    # ---- 两级缓存检查 (v0.5): L1 精确 → L2 语义 ----
     if config.cache_enabled:
         try:
-            from src.cache.semantic_cache import get_cache
-            cache = get_cache(
-                similarity_threshold=config.cache_similarity_threshold,
-                enabled=config.cache_enabled,
+            from src.cache.cache_manager import get_cache_manager
+            cm = get_cache_manager(
+                exact_enabled=config.cache_enabled,
+                semantic_enabled=config.cache_enabled,
             )
-            cached = cache.get(question)
+            cached = cm.get(question)
             if cached:
-                logger.info("Cache HIT: returning cached answer for '%s...'", question[:60])
+                cache_type = cached.get("cache_type", "unknown")
+                logger.info("Cache HIT (%s): '%s...'", cache_type, question[:60])
                 return {
-                    "answer": cached,
-                    "reasoning_trace": ["[cache] Answer served from semantic cache"],
-                    "retrieved_sources": [],
-                    "intent": "simple",
+                    "answer": cached.get("answer", ""),
+                    "reasoning_trace": [f"[cache] {cache_type} 缓存命中"],
+                    "retrieved_sources": cached.get("sources", []),
+                    "intent": cached.get("intent", "simple"),
                     "from_cache": True,
+                    "cache_type": cache_type,
                     "final_state": {},
                 }
         except ImportError:
-            logger.debug("Cache module not available, skipping.")
+            logger.debug("缓存模块不可用，跳过缓存检查")
         except Exception as e:
-            logger.warning("Cache check failed: %s", e)
+            logger.warning("缓存检查失败: %s", e)
 
     graph = get_graph()
 
@@ -1252,24 +1265,20 @@ def run_rag(question: str) -> dict:
             ),
         }
 
-    # ---- Cache the result (v0.4) ----
+    # ---- 写入两级缓存 (v0.5) ----
     if config.cache_enabled and result.get("answer") and not result.get("from_cache"):
         try:
-            from src.cache.semantic_cache import get_cache
-            cache = get_cache(
-                similarity_threshold=config.cache_similarity_threshold,
-                enabled=config.cache_enabled,
+            from src.cache.cache_manager import get_cache_manager
+            cm = get_cache_manager(
+                exact_enabled=config.cache_enabled,
+                semantic_enabled=config.cache_enabled,
             )
-            cache.put(
-                question,
-                result["answer"],
-                metadata={
-                    "intent": result.get("intent", "unknown"),
-                    "sources": result.get("retrieved_sources", []),
-                },
-            )
+            cm.put(question, result, metadata={
+                "intent": result.get("intent", "unknown"),
+                "sources": result.get("retrieved_sources", []),
+            })
         except Exception as e:
-            logger.debug("Cache put failed: %s", e)
+            logger.debug("缓存写入失败: %s", e)
 
     logger.info(f"RAG pipeline complete. Answer length: {len(result['answer'])}")
     return result

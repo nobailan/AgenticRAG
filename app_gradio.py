@@ -120,7 +120,14 @@ def handle_user_message(
 
             elif etype == "done":
                 final_answer = event.get("final_answer", "")
-                history[-1]["content"] = final_answer
+                # 缓存命中标记 (v0.5)
+                cache_type = event.get("cache_type", "")
+                if cache_type == "exact":
+                    history[-1]["content"] = final_answer + "\n\n---\n✅ 命中精确缓存"
+                elif cache_type == "semantic":
+                    history[-1]["content"] = final_answer + "\n\n---\n🔍 命中语义缓存"
+                else:
+                    history[-1]["content"] = final_answer
 
                 # Format sources
                 chunks = event.get("retrieved_chunks", [])
