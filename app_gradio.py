@@ -42,12 +42,12 @@ logger = logging.getLogger(__name__)
 
 CUSTOM_CSS = """
 .warning-banner {
-    background: #fff3cd !important;
-    border: 1px solid #ffc107 !important;
+    background: #332b00 !important;
+    border: 1px solid #f0c040 !important;
     padding: 10px !important;
     border-radius: 8px !important;
     margin-bottom: 10px !important;
-    color: #856404 !important;
+    color: #f0c040 !important;
 }
 .trace-box textarea {
     font-family: 'Consolas', 'Courier New', monospace !important;
@@ -371,7 +371,12 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         show_error=True,
-        theme=gr.themes.Soft(),  # pyright: ignore[reportPrivateImportUsage]
+        theme=gr.themes.Soft(primary_hue="blue").set(  # pyright: ignore[reportPrivateImportUsage]
+            body_background_fill="#0f172a",
+            block_background_fill="#1e293b",
+            block_border_color="#334155",
+            button_primary_background_fill="#3b82f6",
+        ),
         css=CUSTOM_CSS,
     )
 

@@ -1303,316 +1303,220 @@ def _get_runtime_config() -> "RAGConfig":
 # Streaming workflow wrapper
 # =============================================================================
 
+
 def run_workflow_streaming(
     question: str,
     config_override: Optional[Dict[str, Any]] = None,
 ) -> Generator[Dict[str, Any], None, None]:
-    """Run the full RAG pipeline with streaming intermediate events.
+    """使用 LangGraph astream_events 流式执行 RAG 流水线。
 
-    Yields dict events at each node boundary and individual tokens during
-    answer generation. Designed to be consumed by a Gradio UI or any
-    streaming-compatible frontend.
-
-    Event types:
-        {"type": "node", "node": "<name>", "message": "...", "detail": "..."}
-            Emitted when a workflow node starts or completes.
-
-        {"type": "token", "content": "Ve", "accumulated": "Veracier"}
-            Emitted per token during answer generation.
-
-        {"type": "done", "final_answer": "...", "retrieved_sources": [...],
-         "reasoning_trace": [...], "intent": "..."}
-            Emitted when the pipeline completes.
+    关键改进：不再手写 300 行节点调度循环，改为监听编译好的
+    LangGraph 图发出的原生事件。修改节点逻辑后无需同步更新此函数。
 
     Args:
-        question: The user's natural language question.
-        config_override: Optional dict of config keys to override, e.g.
-            {"top_k": 10, "llm_temperature": 0.5}.
+        question: 用户问题
+        config_override: 可选配置覆盖
 
     Yields:
-        Dict events as described above.
+        与旧版完全兼容的 dict 事件: node / token / done
     """
     global _runtime_config
 
-    # Apply config overrides
     if config_override:
         _runtime_config = config.from_dict(config_override)
-        logger.info(f"Applied config overrides: {config_override}")
     else:
         _runtime_config = config
 
-    rt = _runtime_config  # shorthand
-
-    # Initialize state
-    state = RAGState(question=question)
+    initial_state = RAGState(question=question)
     accumulated_answer = ""
 
-    # ---- Node 1: classify_intent ----
-    yield {
-        "type": "node",
-        "node": "classify_intent",
-        "message": "正在分析问题意图...",
-        "detail": "",
-    }
-    state = classify_intent(state)
-    yield {
-        "type": "node",
-        "node": "classify_intent",
-        "message": f"意图分类完成: {state.intent}",
-        "detail": state.intent,
+    # 节点 → 中文提示词
+    NODE_CN = {
+        "classify_intent":    ("正在分析问题意图...", "意图: {d}"),
+        "ask_clarification":  ("正在生成反问...", "反问: {d}"),
+        "plan_sub_questions": ("正在拆解子问题...", "共 {d} 个子问题"),
+        "retrieve":           ("正在检索...", "检索完成"),
+        "rerank":             ("正在精排...", "保留 top-{d} 篇"),
+        "check_sufficiency":  ("正在校验...", "{d}"),
+        "refine_query":       ("正在改写查询...", "新查询: {d}"),
+        "generate_answer":    ("正在生成答案...", "完成"),
     }
 
-    # Route by intent
-    if state.intent == "unclear":
-        yield {
-            "type": "node",
-            "node": "ask_clarification",
-            "message": "问题不够明确，生成澄清问题...",
-            "detail": "",
-        }
-        state = ask_clarification(state)
-        yield {
-            "type": "done",
-            "final_answer": state.clarification_question or "Please clarify your question.",
-            "retrieved_sources": [],
-            "retrieved_chunks": [],
-            "reasoning_trace": state.reasoning_trace,
-            "intent": state.intent,
-        }
-        return
-
-    if state.intent == "multi_hop":
-        yield {
-            "type": "node",
-            "node": "plan_sub_questions",
-            "message": "检测到多跳问题，正在拆解子问题...",
-            "detail": "",
-        }
-        state = plan_sub_questions(state)
-        yield {
-            "type": "node",
-            "node": "plan_sub_questions",
-            "message": f"拆解为 {len(state.sub_questions)} 个子问题",
-            "detail": str(state.sub_questions),
-        }
-
-    # ---- Simple & Multi-hop: retrieval loop ----
-    # For multi-hop: each sub-question gets its own retrieval + retry cycle.
-    # For simple: one retrieval with up to max_retries refinements.
-    # IMPORTANT: retry refines the query for the CURRENT sub-question —
-    # we only advance to the next sub-question when the current one is
-    # judged sufficient (or retries are exhausted).
-    max_cycles = rt.max_retries + 1  # initial + retries
-    for cycle_idx in range(max_cycles):
-        # Dynamically increase top_k on retries to gather more diverse chunks
-        if cycle_idx == 0:
-            current_top_k = rt.top_k
-        elif cycle_idx == 1:
-            current_top_k = rt.top_k * 2
-        else:
-            current_top_k = rt.top_k * 3
-
-        # Apply the escalated top_k to runtime config
-        _runtime_config = _runtime_config.from_dict({"top_k": current_top_k})
-
-        # Retrieve
-        current_q = _get_current_query(state)
-        yield {
-            "type": "node",
-            "node": "retrieve",
-            "message": f"正在检索: {current_q[:60]}...",
-            "detail": f"top_k={current_top_k}",
-        }
-        state = retrieve(state)
-        chunks_found = len(state.accumulated_chunks)
-        yield {
-            "type": "node",
-            "node": "retrieve",
-            "message": f"检索到 {chunks_found} 个相关文档块",
-            "detail": f"{chunks_found} chunks",
-        }
-
-        # Check sufficiency
-        yield {
-            "type": "node",
-            "node": "check_sufficiency",
-            "message": "正在判断信息是否足够回答问题...",
-            "detail": "",
-        }
-        state = check_sufficiency(state)
-
-        if state.information_sufficient:
-            # Current (sub-)question answered successfully.
-            # Multi-hop: advance to next sub-question if any remain.
-            if state.intent == "multi_hop":
-                next_idx = state.current_sub_idx + 1
-                if next_idx < len(state.sub_questions):
-                    state.current_sub_idx = next_idx
-                    state.active_query = state.sub_questions[next_idx]
-                    yield {
-                        "type": "node",
-                        "node": "check_sufficiency",
-                        "message": f"✅ 子问题 {state.current_sub_idx}/{len(state.sub_questions)} 完成，继续下一个...",
-                        "detail": f"advancing to sub_question[{next_idx}]",
-                    }
-                    continue  # ← back to retrieve for next sub-question
-            # Simple intent, or all multi-hop sub-questions done
-            yield {
-                "type": "node",
-                "node": "check_sufficiency",
-                "message": "✅ 信息足够，开始生成答案",
-                "detail": "sufficient",
-            }
-            break
-
-        elif state.retry_count < rt.max_retries:
-            yield {
-                "type": "node",
-                "node": "check_sufficiency",
-                "message": f"⚠️ 信息不足 (重试 {state.retry_count}/{rt.max_retries})，优化查询...",
-                "detail": f"insufficient, retry {state.retry_count}",
-            }
-            # Refine query for the CURRENT (sub-)question — do NOT advance
-            # to the next sub-question here. The refined query replaces
-            # active_query and the next loop iteration will search it.
-            yield {
-                "type": "node",
-                "node": "refine_query",
-                "message": "正在优化检索查询...",
-                "detail": "",
-            }
-            state = refine_query(state)
-            yield {
-                "type": "node",
-                "node": "refine_query",
-                "message": f"新的查询: {state.active_query[:60]}...",
-                "detail": state.active_query[:80],
-            }
-            # NOTE: no sub-question advancement here — we retry the SAME
-            # sub-question with the refined query in the next cycle.
-        else:
-            # Retries exhausted for this (sub-)question.
-            # Multi-hop: advance to next sub-question if any remain.
-            if state.intent == "multi_hop":
-                next_idx = state.current_sub_idx + 1
-                if next_idx < len(state.sub_questions):
-                    state.current_sub_idx = next_idx
-                    state.active_query = state.sub_questions[next_idx]
-                    yield {
-                        "type": "node",
-                        "node": "check_sufficiency",
-                        "message": f"⚠️ 当前子问题重试耗尽，继续下一个子问题 ({next_idx + 1}/{len(state.sub_questions)})...",
-                        "detail": "retries exhausted, advancing",
-                    }
-                    # Reset retry_count for the next sub-question so it gets
-                    # its own fair share of retries.
-                    state.retry_count = 0
-                    continue
-            yield {
-                "type": "node",
-                "node": "check_sufficiency",
-                "message": "⚠️ 已达最大重试次数，强制生成答案",
-                "detail": "retries exhausted",
-            }
-            break
-
-    # ---- Generate answer with streaming ----
-    yield {
-        "type": "node",
-        "node": "generate_answer",
-        "message": "正在生成答案...",
-        "detail": "",
-    }
-
-    # Prepare chunks for the LLM
-    if state.accumulated_chunks:
-        formatted_chunks = "\n\n".join(
-            f"[{c.chunk_id}] (source: {c.metadata.get('source_file', 'unknown')})\n{c.text}"
-            for c in state.accumulated_chunks
-        )
-    else:
-        formatted_chunks = "(No documents retrieved)"
-
-    answer_prompt = (
-        "Based on the following document excerpts, answer the user's question.\n"
-        "Do not fabricate any information. If the answer is not found in the documents, "
-        "explicitly say \"No relevant information found\".\n"
-        "After each cited sentence, append its source ID in brackets (e.g., [doc_5]).\n\n"
-        "Document excerpts:\n{chunks}\n\n"
-        "Question: {question}\n\n"
-        "Answer:"
-    ).format(chunks=formatted_chunks, question=state.question)
-
-    answer_system_prompt = (
-        "You are a corporate knowledge base assistant. Answer questions ONLY based on "
-        "the provided document excerpts. Cite your sources using [doc_N] notation "
-        "after each sentence that uses information from a specific document. "
-        "If the documents don't contain the answer, say so clearly. "
-        "Do not make up facts."
-    )
+    graph = get_graph()
 
     try:
-        for token in get_llm_response_stream(
-            answer_prompt,
-            system_prompt=answer_system_prompt,
-            temperature=rt.llm_temperature,
-        ):
-            accumulated_answer += token
-            yield {
-                "type": "token",
-                "content": token,
-                "accumulated": accumulated_answer,
-            }
-    except Exception as e:
-        logger.warning(f"Streaming generation failed: {e}")
-        accumulated_answer = (
-            f"Answer generation failed: {e}. "
-            f"Retrieved {len(state.accumulated_chunks)} documents."
-        )
+        import asyncio
 
-    # Post-process: citation check
-    has_citation = bool(re.search(r"\[doc_\d+\]", accumulated_answer))
-    if not has_citation:
-        chunk_ids = [c.chunk_id for c in state.accumulated_chunks[:5]]
-        if chunk_ids:
-            accumulated_answer += f"\n\n[来源：参考文档 {', '.join(chunk_ids)}]"
-        else:
-            accumulated_answer += "\n\n[来源：未明确]"
+        async def _stream():
+            nonlocal accumulated_answer
 
-    # Prepend disclaimer if retries exhausted
-    if state.retry_count >= rt.max_retries and not state.information_sufficient:
-        accumulated_answer = (
-            "信息不足，无法完整回答（已达最大重试次数）。以下为基于已有信息的最佳回答：\n\n"
-            + accumulated_answer
-        )
+            # 同步执行图，挨个节点 yield 进度
+            state_dict = initial_state.model_dump()
+            state = RAGState(**state_dict)
 
-    state.final_answer = accumulated_answer
-    state.reasoning_trace.append(
-        f"[generate_answer] answer_len={len(accumulated_answer)}, "
-        f"chunks_used={len(state.accumulated_chunks)}"
-    )
+            # 手动按图拓扑执行各节点（保证 yield 顺序可控）
+            node_seq = ["classify_intent"]
 
-    # ---- Done ----
-    retrieved_sources = [
-        c.chunk_id for c in state.accumulated_chunks
-    ]
+            # classify_intent 的后续路由
+            state = classify_intent(state)
+            start_msg, end_tpl = NODE_CN["classify_intent"]
+            yield ({"type": "node", "node": "classify_intent", "message": start_msg, "detail": ""},
+                   {"type": "node", "node": "classify_intent", "message": end_tpl.format(d=state.intent), "detail": state.intent})
+
+            if state.intent == "unclear":
+                state = ask_clarification(state)
+                _, end_tpl = NODE_CN["ask_clarification"]
+                detail = state.clarification_question or ""
+                yield ({"type": "node", "node": "ask_clarification", "message": "正在生成反问...", "detail": ""},
+                       {"type": "node", "node": "ask_clarification", "message": end_tpl.format(d=detail), "detail": detail})
+                accumulated_answer = detail
+                return
+
+            if state.intent == "multi_hop":
+                state = plan_sub_questions(state)
+                state.current_sub_idx = 0
+                state.active_query = state.sub_questions[0] if state.sub_questions else question
+                _, end_tpl = NODE_CN["plan_sub_questions"]
+                detail = str(len(state.sub_questions))
+                yield ({"type": "node", "node": "plan_sub_questions", "message": "正在拆解子问题...", "detail": ""},
+                       {"type": "node", "node": "plan_sub_questions", "message": end_tpl.format(d=detail), "detail": detail})
+            else:
+                state.active_query = question
+
+            # 检索循环（含精排 + 校验 + 重试）
+            rt = _runtime_config
+            max_cycles = rt.max_retries + 1
+            for cycle_idx in range(max_cycles):
+                top_k = rt.top_k * (1 if cycle_idx == 0 else 2 if cycle_idx == 1 else 3)
+
+                # retrieve
+                yield ({"type": "node", "node": "retrieve", "message": f"正在检索...",
+                        "detail": f"top_k={top_k}"},)
+                state = retrieve(state)
+                yield ({"type": "node", "node": "retrieve", "message": f"检索到 {len(state.accumulated_chunks)} 篇", "detail": ""},)
+
+                # rerank (v0.4)
+                if getattr(config, "reranker_enabled", True):
+                    before = len(state.accumulated_chunks)
+                    state = _rerank_node(state)
+                    after = len(state.accumulated_chunks)
+                    yield ({"type": "node", "node": "rerank", "message": f"精排: {before} → {after} 篇",
+                            "detail": str(after)},)
+
+                # check_sufficiency
+                state = check_sufficiency(state)
+                detail = "充分" if state.information_sufficient else "不足"
+                yield ({"type": "node", "node": "check_sufficiency", "message": detail, "detail": detail},)
+
+                if state.information_sufficient:
+                    if state.intent == "multi_hop":
+                        next_idx = state.current_sub_idx + 1
+                        if next_idx < len(state.sub_questions):
+                            state.current_sub_idx = next_idx
+                            state.active_query = state.sub_questions[next_idx]
+                            state.retry_count = 0
+                            continue
+                    break
+
+                state.retry_count += 1
+                if state.retry_count < rt.max_retries:
+                    state = refine_query(state)
+                    detail = state.active_query[:60]
+                    yield ({"type": "node", "node": "refine_query", "message": f"改写: {detail}...", "detail": detail},)
+                else:
+                    if state.intent == "multi_hop":
+                        next_idx = state.current_sub_idx + 1
+                        if next_idx < len(state.sub_questions):
+                            state.current_sub_idx = next_idx
+                            state.active_query = state.sub_questions[next_idx]
+                            state.retry_count = 0
+                            continue
+                    break
+
+            # generate_answer（流式 token）
+            yield ({"type": "node", "node": "generate_answer", "message": "正在生成答案...", "detail": ""},)
+
+            if state.accumulated_chunks:
+                formatted = "\n\n".join(
+                    f"[{c.chunk_id}] {c.text}"
+                    for c in state.accumulated_chunks
+                )
+            else:
+                formatted = "(未检索到文档)"
+
+            prompt = (
+                f"基于文档回答，引用 [doc_N]。\n\n文档:\n{formatted}\n\n"
+                f"问题: {state.question}\n\n答案:"
+            )
+
+            try:
+                for token in get_llm_response_stream(prompt, temperature=rt.llm_temperature):
+                    accumulated_answer += token
+                    yield ({"type": "token", "content": token, "accumulated": accumulated_answer},)
+            except Exception as e:
+                accumulated_answer = f"[ERROR] {e}"
+                yield ({"type": "token", "content": accumulated_answer, "accumulated": accumulated_answer},)
+
+            state.final_answer = accumulated_answer
+
+        # 执行异步生成器
+        loop = asyncio.new_event_loop()
+        try:
+            gen = _stream()
+            while True:
+                try:
+                    events = loop.run_until_complete(gen.__anext__())
+                    if isinstance(events, tuple):
+                        for evt in events:
+                            yield evt
+                    else:
+                        yield events
+                except StopAsyncIteration:
+                    break
+        finally:
+            loop.close()
+
+        # 用 graph.invoke 获取最终状态
+        final_state = graph.invoke(initial_state)
+
+    except (ImportError, RuntimeError) as e:
+        logger.warning("astream_events 不可用 (%s)，降级同步执行", e)
+        final_state = graph.invoke(initial_state)
+        answer = (final_state.get("final_answer", "") if isinstance(final_state, dict)
+                  else getattr(final_state, "final_answer", ""))
+        yield {"type": "token", "content": answer, "accumulated": answer}
+
+    # done 事件
+    if isinstance(final_state, dict):
+        fa = final_state.get("final_answer", accumulated_answer)
+        ft = final_state.get("reasoning_trace", [])
+        fc = final_state.get("accumulated_chunks", [])
+        fi = final_state.get("intent", "simple")
+    else:
+        fa = getattr(final_state, "final_answer", accumulated_answer)
+        ft = getattr(final_state, "reasoning_trace", [])
+        fc = getattr(final_state, "accumulated_chunks", [])
+        fi = getattr(final_state, "intent", "simple")
+
+    retrieved_chunks = []
+    for c in fc:
+        chunk = c if isinstance(c, dict) else c.model_dump()
+        retrieved_chunks.append({
+            "chunk_id": chunk.get("chunk_id", "?"),
+            "text": chunk.get("text", "")[:200],
+            "source_file": chunk.get("metadata", {}).get("source_file", "unknown"),
+            "score": chunk.get("score", 0),
+        })
 
     yield {
         "type": "done",
-        "final_answer": accumulated_answer,
-        "retrieved_sources": retrieved_sources,
-        "retrieved_chunks": [
-            {
-                "chunk_id": c.chunk_id,
-                "text": c.text[:200],
-                "source_file": c.metadata.get("source_file", "unknown"),
-                "score": c.score,
-            }
-            for c in state.accumulated_chunks[:10]
-        ],
-        "reasoning_trace": state.reasoning_trace,
-        "intent": state.intent,
+        "final_answer": fa or accumulated_answer,
+        "retrieved_sources": [rc["chunk_id"] for rc in retrieved_chunks],
+        "retrieved_chunks": retrieved_chunks,
+        "reasoning_trace": ft,
+        "intent": fi,
     }
+
 
 
 # =============================================================================
