@@ -1,12 +1,15 @@
 """
-models.py -- Shared data models for the Agentic RAG system.
+models.py — 共享数据模型
 
-Defines:
-    - RetrievedChunk (pydantic BaseModel) — a single retrieved chunk
-    - RAGState (pydantic BaseModel) — the full graph state
+定义 RAG 系统中跨模块使用的核心数据结构。提取到独立文件是为了避免
+retriever 和 workflow 之间的循环导入问题。
 
-These are extracted to a shared location to avoid circular imports
-between retriever and workflow modules.
+包含：
+    - RetrievedChunk: 单条检索结果（chunk_id, text, score, metadata）
+    - RAGState:     LangGraph 工作流全程流转的状态对象
+
+使用方式：
+    from src.core.models import RetrievedChunk, RAGState
 """
 
 from typing import List, Optional, Dict, Literal, Any
@@ -15,75 +18,90 @@ from pydantic import BaseModel, Field
 
 
 class RetrievedChunk(BaseModel):
-    """A single retrieved document chunk with its score and source metadata."""
+    """单条检索结果。
+
+    这是 retriever 和 workflow 之间传递文档片段的统一数据格式。
+    FAISS + BM25 混合检索后，每条结果都会封装为这个对象。
+
+    Attributes:
+        chunk_id: 唯一标识，格式 "doc_0", "doc_1" ...
+        text: 文档片段的完整文本
+        score: RRF 融合后的检索得分（越高越相关）
+        metadata: 来源元数据（source_file, page, entity, language 等）
+    """
 
     chunk_id: str
-    """Unique chunk identifier, format 'doc_N' where N is a zero-based integer."""
+    """唯一标识，格式 'doc_N'，N 是从 0 开始的整数"""
 
     text: str
-    """The chunk's full text content."""
+    """文档片段的完整文本内容"""
 
     score: float
-    """RRF-fused retrieval score (higher = more relevant)."""
+    """RRF 融合后的检索得分，越高越相关"""
 
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    """Source metadata.
-    Typical keys: source_file, page, entity, language, format, classification.
-    """
+    """来源元数据。常见字段：source_file, page, entity, language, format, classification"""
 
 
 class RAGState(BaseModel):
-    """The complete state object flowing through the LangGraph.
+    """LangGraph 工作流全程状态。
 
-    All fields have sensible defaults so the graph can be initialized
-    with only a question string and nodes add information incrementally.
+    这个对象在 8 个节点之间流转，每个节点从中读取输入、写入输出。
+    所有字段都有合理的默认值，初始化时只需传入 question。
+
+    工作流节点与字段对应关系：
+        classify_intent    → intent
+        ask_clarification  → clarification_question
+        plan_sub_questions → sub_questions, current_sub_idx
+        retrieve           → accumulated_chunks
+        rerank             → accumulated_chunks（替换为精排后的 top-k）
+        check_sufficiency  → information_sufficient, missing_information
+        refine_query       → active_query
+        generate_answer    → final_answer
     """
 
-    # ---- Input ----
+    # ---- 输入 ----
     question: str = ""
-    """The user's natural language question."""
+    """用户原始问题"""
 
-    # ---- Intent classification (Node 1) ----
+    # ---- classify_intent 输出 ----
     intent: Literal["simple", "multi_hop", "unclear"] = "simple"
-    """Classified question type. Set by classify_intent node."""
+    """意图分类结果：简单查询 / 多跳推理 / 语义模糊"""
 
-    # ---- Multi-hop planning (Node 3) ----
+    # ---- plan_sub_questions 输出 ----
     sub_questions: List[str] = Field(default_factory=list)
-    """Ordered list of sub-questions for multi-hop reasoning. Length >= 2."""
+    """多跳推理时拆解出的子问题列表，长度 ≥ 2"""
 
     current_sub_idx: int = 0
-    """Index of the currently active sub_question (0-based)."""
+    """当前正在处理的子问题索引（从 0 开始）"""
 
     active_query: str = ""
-    """The query string that retrieve() should use.
-    Set by: simple path uses question, multi_hop uses sub_questions[idx],
-    refine_query sets a rewritten query."""
+    """当前检索用的查询字符串。
+    simple 路径 = 原问题；multi_hop 路径 = 当前子问题；retry 路径 = 改写后的查询"""
 
-    # ---- Accumulated retrieval results (Node 4) ----
+    # ---- retrieve + rerank 输出 ----
     accumulated_chunks: List[RetrievedChunk] = Field(default_factory=list)
-    """All retrieved chunks, deduplicated by chunk_id, sorted by score descending."""
+    """累积检索结果，按 chunk_id 去重，按得分降序"""
 
-    # ---- Sufficiency check (Node 5) ----
+    # ---- check_sufficiency 输出 ----
     information_sufficient: bool = False
-    """Whether accumulated_chunks contain enough info to answer the question."""
+    """当前检索结果是否足以回答问题"""
 
     missing_information: Optional[str] = None
-    """When insufficient, describes what specific information is missing.
-    Example: 'missing specific year for R&D spending'."""
+    """信息不足时，描述缺少什么（如"缺少 2022 年的研发支出数字"）"""
 
-    # ---- Final answer (Node 7) ----
+    # ---- generate_answer 输出 ----
     final_answer: Optional[str] = None
-    """The generated answer string, or None if not yet generated."""
+    """最终生成的答案，含 [doc_N] 引用"""
 
-    # ---- Clarification (Node 2) ----
+    # ---- ask_clarification 输出 ----
     clarification_question: Optional[str] = None
-    """When intent is 'unclear', a follow-up question asking the user to clarify."""
+    """意图为 unclear 时，生成的反问句"""
 
-    # ---- Control ----
+    # ---- 控制字段 ----
     retry_count: int = 0
-    """Number of retrieval-refine retries attempted. Capped at config.max_retries."""
+    """当前子问题的检索-改写重试计数，上限由 config.max_retries 控制"""
 
-    # ---- Audit trail ----
+    # ---- 审计追溯 ----
     reasoning_trace: List[str] = Field(default_factory=list)
-    """Step-by-step decision log. Each node appends a timestamped entry.
-    Example: '[classify_intent] intent=multi_hop | confidence=high'"""
+    """每一步决策的日志。示例: '[classify_intent] intent=multi_hop'"""
