@@ -1,0 +1,52 @@
+[
+  {
+    "question": "What is the Group's operating margin and what caused its decline?",
+    "ground_truth": "The Group's operating margin stands at 8.7%, down 0.8 percentage points from the prior year, driven by the integration of Precis-Tec and associated restructuring costs.",
+    "contexts": ["The Group's operating margin stands at 8.7% for the year, down 0.8 percentage points from the prior year, driven by the integration of Precis-Tec and associated restructuring costs."]
+  },
+  {
+    "question": "Where is Veracier Industries S.A. headquartered?",
+    "ground_truth": "Veracier Industries S.A. is headquartered at 42 Avenue de la Grande Armee, 75017 Paris, France. RCS Paris 412 587 936.",
+    "contexts": ["Veracier Industries S.A. 42 Avenue de la Grande Armee 75017 Paris, France RCS Paris 412 587 936"]
+  },
+  {
+    "question": "What is the Group's net cash position as of December 31?",
+    "ground_truth": "The Group's net cash position stands at EUR 127 million as at 31 December, an increase of EUR 23 million compared to the prior year.",
+    "contexts": ["The Group's net cash position stands at EUR 127 million as at 31 December, an increase of EUR 23 million compared to the prior year, primarily driven by working capital improvements."]
+  },
+  {
+    "question": "What are the late delivery penalties in Veracier's contracts?",
+    "ground_truth": "Late delivery penalties are 0.5% of the relevant Purchase Order value per week of delay, capped at 10% of the total Purchase Order value.",
+    "contexts": ["In the event of late delivery, the Customer shall be entitled to liquidated damages of 0.5% of the relevant Purchase Order value per week of delay, capped at 10% of the total Purchase Order value."]
+  },
+  {
+    "question": "What cybersecurity gaps were identified in the NIS2 risk assessment?",
+    "ground_truth": "The NIS2 risk assessment identified gaps in OT network segmentation at the Valence and Stuttgart sites, where industrial networks are not sufficiently isolated from office networks.",
+    "contexts": ["The NIS2 risk evaluation identified gaps in the segmentation of OT networks on the Valence and Stuttgart sites, where industrial networks are not sufficiently isolated from office networks."]
+  },
+  {
+    "question": "What is the annual training budget and what are the priority areas?",
+    "ground_truth": "The annual training plan has a budget of EUR 2.8 million (1.8% of payroll). Priorities: technical skills (35%), security and safety (25%), management (20%), and digital (20%).",
+    "contexts": ["The annual training plan provides a budget of 2.8 million euros, representing 1.8% of total payroll. Priorities focus on technical skills (35%), security and safety (25%), management (20%) and digital (20%)."]
+  },
+  {
+    "question": "What litigation does Veracier Aero face regarding the AV-3000?",
+    "ground_truth": "Aeronord claimed late delivery penalties on AV-3000 batches. The legal analysis recommended provisioning EUR 2,100,000 based on Article 4 of the framework contract.",
+    "contexts": ["Aeronord claims late penalties on AV-3000 batches. Legal analysis: contractual penalties applicable under Article 4 of the framework agreement. Recommendation: provision EUR 2,100,000."]
+  },
+  {
+    "question": "What raw material price increases caused the production cost overrun?",
+    "ground_truth": "A 4.2% production cost overrun was caused by raw material price increases: titanium +18% and specialty steel +12% during the second half of the year.",
+    "contexts": ["The budget variance analysis shows a 4.2% overrun on production costs, primarily attributable to raw material price increases (titanium +18%, specialty steel +12%) during the second half."]
+  },
+  {
+    "question": "What is the absenteeism rate and what are the main causes?",
+    "ground_truth": "The absenteeism rate is 4.2%, up 0.3 points from the previous year. Main causes: musculoskeletal disorders (38%) and other health-related absences.",
+    "contexts": ["Absenteeism stands at 4.2% for the fiscal year, up 0.3 points from the prior year. The main identified causes are musculoskeletal disorders (38%) and other health issues."]
+  },
+  {
+    "question": "What patent litigation does Veracier face from Steiner Industries?",
+    "ground_truth": "Robert Steiner Industries GmbH filed a patent infringement lawsuit on January 15, 2025 at the Landgericht Mannheim regarding patent DE 102019123456.",
+    "contexts": ["Robert Steiner Industries GmbH filed a patent infringement lawsuit on 15.01.2025 at the Landgericht Mannheim. The patent DE 102019123456 concerns turbine inspection technology."]
+  }
+]

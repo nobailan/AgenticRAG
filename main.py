@@ -23,9 +23,10 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 
-from config import config
-from workflow import run_rag, RAGState, get_graph
-from retriever import is_loaded, get_chunk_count
+from src.core.config import config
+from src.agents.workflow import run_rag, get_graph
+from src.core.models import RAGState
+from src.retrieval.retriever import is_loaded, get_chunk_count
 
 logger = logging.getLogger(__name__)
 

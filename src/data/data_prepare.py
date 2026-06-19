@@ -19,7 +19,7 @@ Outputs (in project root by default):
 
 # Load .env file FIRST, before any other project imports, so that
 # RAG_EMBEDDING_MODEL and other env vars are set when config.py initializes.
-import env_loader
+from src.core import env_loader
 env_loader.load_env()
 
 import argparse
@@ -38,7 +38,7 @@ import pandas as pd
 import faiss
 from tqdm import tqdm
 
-from config import config
+from src.core.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -720,7 +720,12 @@ def generate_embeddings(
         )
         config.embedding_dim = actual_dim
 
-    texts = [c["text"] for c in chunks]
+    # Apply E5 passage prefix if configured (v0.4)
+    passage_prefix = getattr(config, "embedding_passage_prefix", "") or ""
+    texts = [
+        f"{passage_prefix}{c['text']}" if passage_prefix else c["text"]
+        for c in chunks
+    ]
     total_chunks = len(texts)
     batch_size = 32
 

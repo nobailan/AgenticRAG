@@ -22,8 +22,9 @@ from pydantic import BaseModel, Field
 
 from langgraph.graph import StateGraph, END
 
-from config import config
-from llm_client import get_llm_response, get_llm_response_stream
+from src.core.config import config
+from src.core.models import RetrievedChunk, RAGState
+from src.llm.llm_client import get_llm_response, get_llm_response_stream
 
 logger = logging.getLogger(__name__)
 
@@ -49,91 +50,13 @@ def _get_retriever() -> Any:
     """
     global _retriever
     if _retriever is None:
-        from retriever import HybridRetriever
+        from src.retrieval.retriever import HybridRetriever
         _retriever = HybridRetriever()
         logger.info("HybridRetriever singleton initialized in workflow")
     return _retriever
 
 
-# =============================================================================
-# Data Models
-# =============================================================================
-
-class RetrievedChunk(BaseModel):
-    """A single retrieved document chunk with its score and source metadata.
-
-    This is the canonical data model shared between retriever.py and workflow.py.
-    """
-    chunk_id: str
-    """Unique chunk identifier, format 'doc_N' where N is a zero-based integer."""
-
-    text: str
-    """The chunk's full text content."""
-
-    score: float
-    """RRF-fused retrieval score (higher = more relevant)."""
-
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    """Source metadata.
-    Typical keys: source_file, page, entity, language, format, classification.
-    """
-
-
-class RAGState(BaseModel):
-    """The complete state object flowing through the LangGraph.
-
-    All fields have sensible defaults so the graph can be initialized
-    with only a question string and nodes add information incrementally.
-    """
-
-    # ---- Input ----
-    question: str = ""
-    """The user's natural language question."""
-
-    # ---- Intent classification (Node 1) ----
-    intent: Literal["simple", "multi_hop", "unclear"] = "simple"
-    """Classified question type. Set by classify_intent node."""
-
-    # ---- Multi-hop planning (Node 3) ----
-    sub_questions: List[str] = Field(default_factory=list)
-    """Ordered list of sub-questions for multi-hop reasoning. Length >= 2."""
-
-    current_sub_idx: int = 0
-    """Index of the currently active sub_question (0-based)."""
-
-    active_query: str = ""
-    """The query string that retrieve() should use.
-    Set by: simple path uses question, multi_hop uses sub_questions[idx],
-    refine_query sets a rewritten query."""
-
-    # ---- Accumulated retrieval results (Node 4) ----
-    accumulated_chunks: List[RetrievedChunk] = Field(default_factory=list)
-    """All retrieved chunks, deduplicated by chunk_id, sorted by score descending."""
-
-    # ---- Sufficiency check (Node 5) ----
-    information_sufficient: bool = False
-    """Whether accumulated_chunks contain enough info to answer the question."""
-
-    missing_information: Optional[str] = None
-    """When insufficient, describes what specific information is missing.
-    Example: 'missing specific year for R&D spending'."""
-
-    # ---- Final answer (Node 7) ----
-    final_answer: Optional[str] = None
-    """The generated answer string, or None if not yet generated."""
-
-    # ---- Clarification (Node 2) ----
-    clarification_question: Optional[str] = None
-    """When intent is 'unclear', a follow-up question asking the user to clarify."""
-
-    # ---- Control ----
-    retry_count: int = 0
-    """Number of retrieval-refine retries attempted. Capped at config.max_retries."""
-
-    # ---- Audit trail ----
-    reasoning_trace: List[str] = Field(default_factory=list)
-    """Step-by-step decision log. Each node appends a timestamped entry.
-    Example: '[classify_intent] intent=multi_hop | confidence=high'"""
+# Data models (RetrievedChunk, RAGState) are imported from src.core.models
 
 
 # =============================================================================
@@ -513,7 +436,7 @@ def retrieve(state: RAGState) -> RAGState:
         state.reasoning_trace — appended
 
     Implementation pseudocode:
-        from retriever import hybrid_search
+        from src.retrieval.retriever import hybrid_search
 
         # Determine active query
         if state.active_query:
@@ -1075,6 +998,81 @@ def route_by_sufficiency(state: RAGState) -> str:
 
 
 # =============================================================================
+# Re-rank Node (v0.4)
+# =============================================================================
+
+def _rerank_node(state: RAGState) -> RAGState:
+    """Cross-encoder re-rank node.
+
+    Inserted between retrieve and check_sufficiency. Uses the
+    CrossEncoderReranker to re-score the accumulated chunks and keep
+    only the top-k most relevant documents.
+
+    The reranker is controlled by config — set reranker_enabled=False
+    to skip re-ranking entirely.
+    """
+    if not state.accumulated_chunks:
+        state.reasoning_trace.append("[rerank] No documents to re-rank.")
+        return state
+
+    try:
+        from src.retrieval.reranker import get_reranker
+    except ImportError as e:
+        state.reasoning_trace.append(f"[rerank] Reranker not available: {e}")
+        return state
+
+    reranker = get_reranker(
+        model_name=getattr(config, "reranker_model", "BAAI/bge-reranker-base"),
+        top_k=getattr(config, "reranker_top_k", 5),
+        enabled=getattr(config, "reranker_enabled", True),
+    )
+
+    if not reranker.enabled:
+        state.reasoning_trace.append("[rerank] Skipped (disabled in config).")
+        return state
+
+    # Convert RetrievedChunk list to dict list for reranker
+    current_q = _get_current_query(state)
+    doc_dicts = [
+        {
+            "chunk_id": c.chunk_id,
+            "text": c.text,
+            "score": c.score,
+            "metadata": c.metadata,
+            "chunk": c,  # keep original reference
+        }
+        for c in state.accumulated_chunks
+    ]
+
+    before = len(doc_dicts)
+    reranked = reranker.rerank(current_q, doc_dicts)
+    after = len(reranked)
+
+    # Replace accumulated_chunks with re-ranked results
+    from src.core.models import RetrievedChunk
+    new_chunks = []
+    for d in reranked:
+        if "chunk" in d:
+            c = d["chunk"]
+            c.score = d.get("rerank_score", c.score)
+            new_chunks.append(c)
+        else:
+            # Fallback: reconstruct from dict
+            new_chunks.append(RetrievedChunk(
+                chunk_id=d["chunk_id"],
+                text=d["text"],
+                score=d.get("rerank_score", d.get("score", 0)),
+                metadata=d.get("metadata", {}),
+            ))
+
+    state.accumulated_chunks = new_chunks
+    state.reasoning_trace.append(
+        f"[rerank] Re-ranked {before} documents → top-{after}"
+    )
+    return state
+
+
+# =============================================================================
 # Graph Construction
 # =============================================================================
 
@@ -1100,11 +1098,12 @@ def build_graph() -> StateGraph:
     """
     graph = StateGraph(RAGState)
 
-    # ---- Add all 7 nodes ----
+    # ---- Add all nodes (8 with rerank) ----
     graph.add_node("classify_intent", classify_intent)
     graph.add_node("ask_clarification", ask_clarification)
     graph.add_node("plan_sub_questions", plan_sub_questions)
     graph.add_node("retrieve", retrieve)
+    graph.add_node("rerank", _rerank_node)
     graph.add_node("check_sufficiency", check_sufficiency)
     graph.add_node("refine_query", refine_query)
     graph.add_node("generate_answer", generate_answer)
@@ -1141,8 +1140,9 @@ def build_graph() -> StateGraph:
         },
     )
 
-    # ---- retrieve → check_sufficiency (all paths: simple, multi_hop, retry) ----
-    graph.add_edge("retrieve", "check_sufficiency")
+    # ---- retrieve → rerank → check_sufficiency (all paths) ----
+    graph.add_edge("retrieve", "rerank")
+    graph.add_edge("rerank", "check_sufficiency")
 
     # ---- refine_query → retrieve (retry loop entrance) ----
     graph.add_edge("refine_query", "retrieve")
@@ -1195,6 +1195,30 @@ def run_rag(question: str) -> dict:
             - intent: str — classified intent
             - final_state: dict — the complete final RAGState as dict
     """
+    # ---- Semantic cache check (v0.4) ----
+    if config.cache_enabled:
+        try:
+            from src.cache.semantic_cache import get_cache
+            cache = get_cache(
+                similarity_threshold=config.cache_similarity_threshold,
+                enabled=config.cache_enabled,
+            )
+            cached = cache.get(question)
+            if cached:
+                logger.info("Cache HIT: returning cached answer for '%s...'", question[:60])
+                return {
+                    "answer": cached,
+                    "reasoning_trace": ["[cache] Answer served from semantic cache"],
+                    "retrieved_sources": [],
+                    "intent": "simple",
+                    "from_cache": True,
+                    "final_state": {},
+                }
+        except ImportError:
+            logger.debug("Cache module not available, skipping.")
+        except Exception as e:
+            logger.warning("Cache check failed: %s", e)
+
     graph = get_graph()
 
     initial_state = RAGState(question=question)
@@ -1227,6 +1251,25 @@ def run_rag(question: str) -> dict:
                 exclude={"accumulated_chunks", "reasoning_trace"}
             ),
         }
+
+    # ---- Cache the result (v0.4) ----
+    if config.cache_enabled and result.get("answer") and not result.get("from_cache"):
+        try:
+            from src.cache.semantic_cache import get_cache
+            cache = get_cache(
+                similarity_threshold=config.cache_similarity_threshold,
+                enabled=config.cache_enabled,
+            )
+            cache.put(
+                question,
+                result["answer"],
+                metadata={
+                    "intent": result.get("intent", "unknown"),
+                    "sources": result.get("retrieved_sources", []),
+                },
+            )
+        except Exception as e:
+            logger.debug("Cache put failed: %s", e)
 
     logger.info(f"RAG pipeline complete. Answer length: {len(result['answer'])}")
     return result

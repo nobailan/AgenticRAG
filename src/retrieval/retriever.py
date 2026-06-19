@@ -12,7 +12,7 @@ Architecture:
     - Deterministic: same (query, index) pair always returns identical results.
 
 Usage:
-    from retriever import hybrid_search
+    from src.retrieval.retriever import hybrid_search
     results = hybrid_search("What was the R&D budget?", top_k=5)
 """
 
@@ -27,8 +27,8 @@ import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 
-from config import config
-from workflow import RetrievedChunk
+from src.core.config import config
+from src.core.models import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
@@ -227,9 +227,13 @@ def _faiss_search(query: str, top_k: int) -> List[Tuple[int, float]]:
     assert _embedding_model is not None
     assert _faiss_index is not None
 
+    # Apply E5 query prefix if configured (v0.4)
+    query_prefix = getattr(config, "embedding_query_prefix", "") or ""
+    prefixed_query = f"{query_prefix}{query}" if query_prefix else query
+
     # Embed query
     query_vec = _embedding_model.encode(
-        [query],
+        [prefixed_query],
         normalize_embeddings=True,  # L2 normalization
         show_progress_bar=False,
     ).astype(np.float32)
