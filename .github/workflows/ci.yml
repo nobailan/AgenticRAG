@@ -1,11 +1,11 @@
 # AgenticRAG CI — 回归测试流水线
-# 触发条件: push 到 main 分支 / PR 创建或更新
+# 触发: push 到 main / PR
 
 name: Regression Test
 
 on:
   push:
-    branches: [main, feature/*]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -45,9 +45,29 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ragas langchain-openai  # RAGAS 评分依赖
+
+      - name: Check API key
+        id: check_key
+        run: |
+          if [ -z "${{ secrets.DEEPSEEK_API_KEY }}" ]; then
+            echo "has_key=false" >> $GITHUB_OUTPUT
+            echo "::warning::DEEPSEEK_API_KEY secret not configured. Skipping regression tests."
+          else
+            echo "has_key=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check index files
+        id: check_index
+        run: |
+          if [ -f "chunks.jsonl" ] && [ -f "faiss.index" ]; then
+            echo "has_index=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_index=false" >> $GITHUB_OUTPUT
+            echo "::warning::Index files not found. Run data_prepare.py first."
+          fi
 
       - name: Run regression tests
+        if: steps.check_key.outputs.has_key == 'true' && steps.check_index.outputs.has_index == 'true'
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           RAG_LLM_MODEL: deepseek-v4-pro
@@ -57,9 +77,13 @@ jobs:
         run: |
           python evaluation/regression_test.py --limit 10
 
-      - name: Upload regression report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: regression-results
-          path: evaluation/comparison_report.md
+      - name: Summary (tests skipped)
+        if: steps.check_key.outputs.has_key != 'true' || steps.check_index.outputs.has_index != 'true'
+        run: |
+          echo "## ⏭️ Regression tests skipped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason**: API key or index files not available in CI environment." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### To enable CI tests:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Add \`DEEPSEEK_API_KEY\` to repository Secrets" >> $GITHUB_STEP_SUMMARY
+          echo "2. Upload index files or run \`data_prepare.py\` in CI" >> $GITHUB_STEP_SUMMARY
