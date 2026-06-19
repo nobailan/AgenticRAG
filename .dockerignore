@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+.claude/
+
+# Generated index files (rebuild in container)
+chunks.jsonl
+faiss.index
+bm25_index.pkl
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Gradio cache
+.gradio/
+
+# Documentation (not needed at runtime)
+document/
+tests/
+
+# Docker
+.git/
+docker-compose.override.yml

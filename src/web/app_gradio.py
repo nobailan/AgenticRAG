@@ -14,6 +14,13 @@ Usage:
 Requires:
     gradio>=4.0.0
 """
+from src.core import env_loader
+env_loader.load_env()
+
+from src.core.config import config
+print(f"Chunk JSONL path: {config.chunk_jsonl_path}")
+print(f"FAISS index path: {config.faiss_index_path}")
+print(f"BM25 index path: {config.bm25_index_path}")
 import logging
 import os
 import sys
@@ -25,9 +32,6 @@ import gradio as gr
 
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent))
-
-from src.core import env_loader
-env_loader.load_env()
 
 from src.core.config import config
 from src.agents.workflow import run_workflow_streaming

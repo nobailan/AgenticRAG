@@ -19,7 +19,7 @@ Retry logic:
     - Returns stripped response content
 
 Usage:
-    from llm_client import get_llm_response
+    from src.llm.llm_client import get_llm_response
     answer = get_llm_response("What is 2+2?", system_prompt="Be concise.")
 """
 
@@ -28,7 +28,7 @@ import os
 import time
 from typing import Optional
 
-from config import config
+from src.core.config import config
 
 logger = logging.getLogger(__name__)
 

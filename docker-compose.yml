@@ -1,0 +1,50 @@
+# AgenticRAG v0.4 — Docker Compose stack
+# Start: docker-compose up --build
+# Stop:  docker-compose down
+
+version: "3.9"
+
+services:
+  app:
+    build: .
+    image: agenticrag:v0.4
+    container_name: agenticrag-app
+    ports:
+      - "7860:7860"
+    environment:
+      - RAG_LLM_MODEL=${RAG_LLM_MODEL:-deepseek-v4-pro}
+      - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}
+      - RAG_LOG_LEVEL=${RAG_LOG_LEVEL:-INFO}
+      - RAG_CACHE_ENABLED=${RAG_CACHE_ENABLED:-true}
+      - RAG_CACHE_REDIS_URL=redis://redis:6379/0
+      - RAG_RERANKER_ENABLED=${RAG_RERANKER_ENABLED:-true}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    env_file:
+      - .env
+    volumes:
+      # Persist generated index files
+      - ./data/indices:/app/data/indices
+      # Embedding model cache
+      - ./data/models:/root/.cache/huggingface
+    depends_on:
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: agenticrag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  redis_data:

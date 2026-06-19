@@ -21,7 +21,8 @@ def load_env(env_file: Optional[Path] = None) -> None:
     Args:
         env_file: 可选，指定 .env 文件路径，默认为项目根目录下的 .env
     """
-    project_root = Path(__file__).parent.resolve()
+    # env_loader is at src/core/env_loader.py → root is 3 levels up
+    project_root = Path(__file__).resolve().parent.parent.parent
 
     if env_file is None:
         env_file = project_root / ".env"
