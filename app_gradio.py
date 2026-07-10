@@ -374,10 +374,15 @@ if __name__ == "__main__":
     )
 
     print("=" * 60)
-    print("  Agentic RAG v0.3 — Gradio Web UI")
+    print("  Agentic RAG v0.7 — Gradio Web UI")
     print("=" * 60)
     print(f"  Embedding model: {config.embedding_model_name}")
     print(f"  LLM: {config.llm_provider}:{config.llm_model}")
+    print(f"  RBAC: {'开' if config.rbac_enabled else '关'}  "
+          f"审计: {'开' if config.audit_enabled else '关'}  "
+          f"PII: {config.pii_mode}")
+    print(f"  LLM fallback: {'开' if config.llm_fallback_enabled else '关'}  "
+          f"限流: {config.rate_limit_rpm} RPM")
 
     # Eagerly load retrieval indexes at startup (not lazy)
     print("  Loading retrieval indexes...")
@@ -391,6 +396,27 @@ if __name__ == "__main__":
     print()
 
     demo = build_ui()
+
+    # ---- 健康检查端点 (v0.7) ----
+    # 利用 Gradio 底层的 FastAPI app 挂载 /health 路由
+    try:
+        from src.security.health import get_health_checker
+        health = get_health_checker()
+
+        # Gradio 6.x 的底层 app 可通过 demo.app 访问
+        @demo.app.get("/health")
+        def health_check():
+            return health.check()
+
+        @demo.app.get("/ready")
+        def ready_check():
+            ok = health.is_ready()
+            return {"ready": ok}, 200 if ok else 503
+
+        print("  Health endpoint: http://localhost:7860/health")
+        print("  Ready endpoint:  http://localhost:7860/ready")
+    except Exception as e:
+        logger.warning("健康检查端点注册失败: %s", e)
     demo.queue(max_size=10)
 
     # Note: share=False because frpc cannot be downloaded behind some firewalls.

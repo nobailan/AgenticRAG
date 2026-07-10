@@ -249,6 +249,27 @@ class RAGConfig:
     """Max characters per document sent to the cross-encoder."""
 
     # ------------------------------------------------------------------
+    # Security (v0.7)
+    # ------------------------------------------------------------------
+    rbac_enabled: bool = os.environ.get("RAG_RBAC_ENABLED", "true").lower() == "true"
+    """Enable role-based access control for document retrieval."""
+
+    audit_enabled: bool = os.environ.get("RAG_AUDIT_ENABLED", "true").lower() == "true"
+    """Enable query audit logging (JSON Lines)."""
+
+    pii_mode: str = os.environ.get("RAG_PII_MODE", "mask")
+    """PII detection mode: 'mask' (脱敏), 'warn' (告警), 'off' (关闭)."""
+
+    # ------------------------------------------------------------------
+    # Reliability (v0.7)
+    # ------------------------------------------------------------------
+    llm_fallback_enabled: bool = os.environ.get("RAG_LLM_FALLBACK_ENABLED", "true").lower() == "true"
+    """Enable multi-provider LLM fallback chain."""
+
+    rate_limit_rpm: int = int(os.environ.get("RAG_RATE_LIMIT_RPM", "60"))
+    """Maximum requests per minute. 0 = disabled."""
+
+    # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
     log_level: str = os.environ.get("RAG_LOG_LEVEL", "INFO")

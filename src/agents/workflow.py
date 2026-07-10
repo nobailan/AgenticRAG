@@ -1288,6 +1288,27 @@ def run_rag(question: str, conversation_history: Optional[List[Dict[str, str]]] 
         except Exception as e:
             logger.debug("缓存写入失败: %s", e)
 
+    # ---- PII 检测脱敏 (v0.7) ----
+    if config.pii_mode != "off" and result.get("answer"):
+        try:
+            from src.security.pii_detector import get_pii_detector
+            detector = get_pii_detector(mode=config.pii_mode, enabled=True)
+            clean_answer, hits = detector.sanitize(result["answer"])
+            if hits:
+                result["answer"] = clean_answer
+                logger.info("PII 已处理: %d 处敏感信息", sum(h.get("count", 0) for h in hits))
+        except Exception as e:
+            logger.debug("PII 检测跳过: %s", e)
+
+    # ---- 审计日志 (v0.7) ----
+    if config.audit_enabled:
+        try:
+            from src.security.audit import get_audit_logger
+            audit = get_audit_logger(enabled=True)
+            audit.log_query(question, result, user_id="default", role="viewer")
+        except Exception as e:
+            logger.debug("审计日志写入失败: %s", e)
+
     logger.info(f"RAG pipeline complete. Answer length: {len(result['answer'])}")
     return result
 
