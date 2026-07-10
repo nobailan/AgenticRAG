@@ -44,6 +44,10 @@ tqdm>=4.65.0
 # Token counting (optional, for tiktoken-based chunking)
 tiktoken>=0.5.0
 
+# Redis (distributed cache, rate limiting, RBAC, audit)
+# v5.x for Windows compatibility; upgrade to v6.x on Linux
+redis>=4.0,<6.0
+
 # NLP toolkit (sentence tokenization)
 nltk>=3.8.0
 
