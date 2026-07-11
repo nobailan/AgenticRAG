@@ -226,17 +226,12 @@ class DataPipeline:
     # ------------------------------------------------------------------
 
     def build_indexes(self, all_chunks: List[Dict], output_dir: Optional[str] = None):
-        """对所有 chunk 生成 embedding 并构建 FAISS + BM25 索引。
-
-        Args:
-            all_chunks: 全部文档的 chunk 列表
-            output_dir: 输出目录（默认项目根目录）
-        """
+        """对所有 chunk 生成 embedding 并构建 FAISS + BM25 索引。"""
         if not all_chunks:
             logger.error("无 chunk，跳过索引构建")
             return
 
-        output_dir = Path(output_dir) if output_dir else Path.cwd()
+        output_dir = Path(output_dir) if output_dir else Path("data/indices")
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Embedding（GPU 加速）
@@ -262,9 +257,11 @@ class DataPipeline:
         faiss.write_index(index, str(output_dir / "faiss.index"))
         logger.info("FAISS 索引: %d vectors, dim=%d", len(all_chunks), dim)
 
-        # BM25 索引
-        from src.data.data_prepare import build_bm25_index, export_chunks_jsonl
-        # 转换为旧格式兼容
+        # BM25 索引 + chunks.jsonl
+        import json
+        from src.data.data_prepare import build_bm25_index
+
+        chunks_path = output_dir / "chunks.jsonl"
         legacy_chunks = []
         for i, c in enumerate(all_chunks):
             legacy_chunks.append({
@@ -273,7 +270,11 @@ class DataPipeline:
                 "metadata": c.get("metadata", {}),
                 "embedding_idx": i,
             })
-        export_chunks_jsonl(legacy_chunks, output_dir)
+        with open(chunks_path, "w", encoding="utf-8") as f:
+            for chunk in legacy_chunks:
+                f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+        logger.info("Chunks JSONL: %d chunks -> %s", len(legacy_chunks), chunks_path)
+
         build_bm25_index(legacy_chunks, output_dir)
 
         logger.info("索引构建完成: %s", output_dir)

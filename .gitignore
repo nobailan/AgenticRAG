@@ -34,6 +34,10 @@ chunks.jsonl
 faiss.index
 bm25_index.pkl
 
+# Downloaded datasets (本地测试数据，不上传)
+data/datasets/
+data/indices/
+
 # Dataset (私有数据集，不提交到 Git)
 veracier-industries/
 
