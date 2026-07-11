@@ -35,11 +35,19 @@ def _detect_best_device() -> str:
         import torch
 
         if torch.cuda.is_available():
-            device_name = torch.cuda.get_device_name(0) or "CUDA GPU"
-            msg = f"[device] cuda ({device_name})"
-            print(msg, flush=True)
-            logger.info("Embedding device: cuda (%s)", device_name)
-            return "cuda"
+            try:
+                # 小延迟让 CUDA 驱动完成初始化（WDDM 模式需要）
+                import time; time.sleep(0.1)
+                device_name = torch.cuda.get_device_name(0) or "CUDA GPU"
+                msg = f"[device] cuda ({device_name})"
+                print(msg, flush=True)
+                logger.info("Embedding device: cuda (%s)", device_name)
+                return "cuda"
+            except Exception as e:
+                msg = f"[device] CUDA detected but inaccessible ({e}), falling back to CPU"
+                print(msg, flush=True)
+                logger.warning(msg)
+                return "cpu"
 
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             msg = "[device] mps (Apple Metal)"

@@ -275,7 +275,7 @@ class DataPipeline:
                 f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
         logger.info("Chunks JSONL: %d chunks -> %s", len(legacy_chunks), chunks_path)
 
-        build_bm25_index(legacy_chunks, output_dir)
+        build_bm25_index(legacy_chunks, str(output_dir / "bm25_index.pkl"))
 
         logger.info("索引构建完成: %s", output_dir)
 
