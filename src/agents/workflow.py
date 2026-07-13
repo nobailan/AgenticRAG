@@ -1501,8 +1501,9 @@ def run_workflow_streaming(
         finally:
             loop.close()
 
-        # 用 graph.invoke 获取最终状态
-        final_state = graph.invoke(initial_state)
+        # 最终状态由 _stream() 内部的手动节点调用直接产出
+        # (不再额外 graph.invoke，避免重复执行整个工作流)
+        final_state = state.model_dump() if hasattr(state, 'model_dump') else state.__dict__
 
     except (ImportError, RuntimeError) as e:
         logger.warning("astream_events 不可用 (%s)，降级同步执行", e)
