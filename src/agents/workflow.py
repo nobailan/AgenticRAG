@@ -168,24 +168,25 @@ def classify_intent(state: RAGState) -> RAGState:
     prompt = (
         "Classify the following question.\n\n"
         "Rules:\n"
-        "- If the question has multiple distinct parts joined by 'and' "
-        "(e.g., asking for both a count AND a list, or comparing multiple entities), "
-        "it is multi_hop because it requires multiple retrievals to answer fully.\n"
-        "- If the answer can be found directly from a single document, return \"simple\".\n"
-        "- If it requires combining information from multiple documents or step-by-step "
-        "reasoning, return \"multi_hop\".\n"
-        "- If the question is vague, ambiguous, or missing essential entities, return \"unclear\".\n\n"
+        "- 'multi_hop' ONLY if the question truly requires combining info from "
+        "MULTIPLE DIFFERENT documents (e.g. comparing two companies, cross-referencing "
+        "a policy against a specific incident).\n"
+        "- 'and' alone does NOT make it multi_hop — if all parts are about the SAME "
+        "topic and likely answered by a single document, it is 'simple'.\n"
+        "  Example: 'What are the size limits for uploads and total requests?' is simple "
+        "(both about multipart API, same doc).\n"
+        "  Example: 'What are the upload limits AND what caused the Jan 2026 outage?' "
+        "is multi_hop (two unrelated topics).\n"
+        "- 'unclear' only if the question is missing essential entities or is truly vague.\n\n"
         "Question: {question}\n\n"
         "Only return one word."
     ).format(question=state.question)
 
     system_prompt = (
-        "You are a query classifier for a corporate knowledge base. "
-        "Analyze the user's question and classify its complexity. "
-        "IMPORTANT: Questions with multiple parts (joined by 'and'), comparisons, "
-        "or those asking for both numeric counts and named lists are virtually always multi_hop. "
-        "Respond with EXACTLY one word: simple, multi_hop, or unclear. "
-        "Do not add any explanation, punctuation, or whitespace."
+        "You are a query classifier. Be conservative: default to 'simple' unless "
+        "the question REQUIRES multiple independent retrievals across unrelated topics. "
+        "The word 'and' is NOT sufficient to trigger multi_hop. "
+        "Respond with EXACTLY one word: simple, multi_hop, or unclear."
     )
 
     try:
@@ -370,6 +371,25 @@ def plan_sub_questions(state: RAGState) -> RAGState:
                 cleaned.append(line)
 
         state.sub_questions = cleaned
+
+        # 去重：如果拆出的子问题几乎相同，降级为 simple 避免死循环
+        if len(state.sub_questions) >= 2:
+            # 简单相似度检查：去掉常见停用词后比较
+            def _norm(s):
+                for w in ['the','a','an','is','are','what','for','of','in','to','?','.']:
+                    s = s.replace(f' {w} ', ' ')
+                return s.strip().lower()
+            unique = []
+            for sq in state.sub_questions:
+                if not any(_norm(sq) == _norm(u) for u in unique):
+                    unique.append(sq)
+            if len(unique) < 2:
+                logger.warning("Sub-questions too similar, reverting to simple intent")
+                state.intent = "simple"
+                state.sub_questions = []
+                state.active_query = state.question
+                return state
+            state.sub_questions = unique
 
         # Fallback: if fewer than 2 sub-questions, duplicate the original
         if len(state.sub_questions) < 2:
