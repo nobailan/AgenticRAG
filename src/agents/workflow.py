@@ -1372,11 +1372,13 @@ def run_workflow_streaming(
 
     graph = get_graph()
 
+    state = None  # 在 _stream() 外部声明，供 finally 后的 final_state 使用
+
     try:
         import asyncio
 
         async def _stream():
-            nonlocal accumulated_answer
+            nonlocal accumulated_answer, state
 
             # 同步执行图，挨个节点 yield 进度
             state_dict = initial_state.model_dump()
