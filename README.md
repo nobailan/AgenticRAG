@@ -23,6 +23,50 @@
 
 ## 🏗 系统架构
 
+```mermaid
+graph TB
+    UI["👤 Gradio Web UI<br/>流式对话 + 推理轨迹 + 来源面板"]
+    CLI["💻 CLI / API"]
+
+    subgraph 安全["🛡️ 安全层"]
+        RBAC["RBAC · 审计 · PII · 限流<br/>Redis 分布式"]
+    end
+
+    subgraph 缓存["⚡ 两级缓存"]
+        L1["L1 精确缓存<br/>MD5 | 100ms"]
+        L2["L2 语义缓存<br/>FAISS | 200ms"]
+    end
+
+    subgraph Agent["🧠 Agent 工作流 (LangGraph 8节点)"]
+        N1["classify_intent"] --> N2["plan_sub_questions"]
+        N1 --> N3["retrieve"]
+        N3 --> N4["rerank (精排)"]
+        N4 --> N5["check_sufficiency"]
+        N5 -->|充分| N6["generate_answer"]
+        N5 -->|不足| N7["refine_query"]
+        N7 --> N3
+    end
+
+    subgraph 检索["🔍 检索层"]
+        FAISS["FAISS Dense"] --> RRF["RRF 融合"]
+        BM25["BM25 Sparse"] --> RRF
+        RRF --> CE["Cross-Encoder 精排"]
+    end
+
+    subgraph 数据["📦 数据管线 (v0.8)"]
+        Ing["多格式提取"] --> Clean["四层清洗"]
+        Clean --> Chunk["自适应分块<br/>Sentence Window"]
+        Chunk --> Emb["GPU Embedding"]
+        Emb --> Idx["FAISS+BM25 索引"]
+    end
+
+    UI --> 安全 --> 缓存 --> Agent --> 检索 --> 数据
+```
+
+> 以上为简化版全链路架构。详细版含数据流时序图、项目结构图、技术栈脑图，见 [架构图_v0.8.md](document/架构图_v0.8.md)
+
+## 🏗 系统架构（文字版）
+
 ```
 用户问题
   │
