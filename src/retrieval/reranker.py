@@ -67,25 +67,47 @@ class CrossEncoderReranker:
     def model(self):
         """懒加载 cross-encoder 模型。
 
-        只有在 self.enabled=True 且首次调用时才初始化模型，启动时不会加载。
-        如果 sentence-transformers 未安装或模型加载失败，自动降级为禁用状态。
+        先检查本地缓存，模型不在本地则跳过（不等网络下载，避免卡住数分钟）。
+        只有 self.enabled=True 且首次调用时才初始化模型。
         """
         if self._model is None and self.enabled:
+            # ---- 检查本地缓存 ----
+            if not self._is_model_cached():
+                logger.warning(
+                    "Cross-encoder 模型未在本地缓存 (%s)，跳过精排。"
+                    "下载模型: python -c \"from sentence_transformers import CrossEncoder; "
+                    "CrossEncoder('%s')\"",
+                    self.model_name, self.model_name,
+                )
+                self.enabled = False
+                return None
+
             try:
                 from sentence_transformers import CrossEncoder
                 logger.info("正在加载 cross-encoder 模型: %s", self.model_name)
-                self._model = CrossEncoder(self.model_name)
+                self._model = CrossEncoder(self.model_name, local_files_only=True)
                 logger.info("Cross-encoder 模型加载完成")
             except ImportError:
-                logger.error(
-                    "sentence-transformers 未安装，无法使用精排功能。"
-                    "安装命令: pip install sentence-transformers"
-                )
+                logger.error("sentence-transformers 未安装，精排不可用")
                 self.enabled = False
             except Exception as e:
                 logger.error("Cross-encoder 模型加载失败: %s", e)
                 self.enabled = False
         return self._model
+
+    def _is_model_cached(self) -> bool:
+        """检查 cross-encoder 模型是否已在本地 HuggingFace 缓存中。"""
+        import os
+        cache_dir = os.path.join(
+            os.path.expanduser("~"), ".cache", "huggingface", "hub"
+        )
+        # bge-reranker-base 的缓存目录名
+        model_dir = os.path.join(
+            cache_dir, "models--BAAI--bge-reranker-base", "snapshots"
+        )
+        if os.path.isdir(model_dir) and os.listdir(model_dir):
+            return True
+        return False
 
     def rerank(
         self, query: str, documents: List[Dict], return_all_on_fallback: bool = True

@@ -81,14 +81,23 @@ Write-Host "[OK] $pyVer" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 # 2. 预检查：索引文件 & API Key（仅提示，不阻塞启动）
 # ---------------------------------------------------------------------------
+$INDEX_DIR = "data/indices/rag_bench"
 $indexFiles = @('faiss.index', 'chunks.jsonl', 'bm25_index.pkl')
-$missing = $indexFiles | Where-Object { -not (Test-Path (Join-Path $ProjectRoot $_)) }
+$missing = $indexFiles | Where-Object { -not (Test-Path (Join-Path $ProjectRoot (Join-Path $INDEX_DIR $_))) }
 if ($missing) {
     Write-Host "[WARN] 缺少索引文件: $($missing -join ', ')" -ForegroundColor Yellow
-    Write-Host "       请先运行数据准备脚本生成索引 (python -m src.data.data_prepare ...)。" -ForegroundColor Yellow
+    Write-Host "       请先运行: python -m src.data.pipeline --input data/datasets --device cuda" -ForegroundColor Yellow
 } else {
-    Write-Host "[OK] 索引文件齐全 (faiss.index / chunks.jsonl / bm25_index.pkl)" -ForegroundColor Green
+    Write-Host "[OK] 索引文件齐全 ($INDEX_DIR/)" -ForegroundColor Green
+    # 指向新索引
+    $env:RAG_CHUNK_JSONL = "$INDEX_DIR/chunks.jsonl"
+    $env:RAG_FAISS_INDEX = "$INDEX_DIR/faiss.index"
+    $env:RAG_BM25_INDEX  = "$INDEX_DIR/bm25_index.pkl"
 }
+
+# 精排器模型不在本地则关闭，避免启动时卡住等网络
+$env:RAG_RERANKER_ENABLED = "false"
+$env:RAG_EMBEDDING_DEVICE = "cpu"  # GPU 可改为 cuda
 
 $hasApiKey = $env:DEEPSEEK_API_KEY -or $env:OPENAI_API_KEY -or $env:ANTHROPIC_API_KEY
 if (-not $hasApiKey) {
