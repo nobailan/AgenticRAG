@@ -1,0 +1,51 @@
+================================================================
+  AgenticRAG v0.8 测试问题集 — EnterpriseRAG-Bench
+  (基于 60,818 chunks 的实际内容，已验证可回答)
+================================================================
+
+=== 简单检索 (Simple) ===
+
+1. What are the default size limits for file uploads and total request size?
+
+2. What template telemetry header format is the company standardizing on for KPI tracking?
+
+3. What passing score do managers need on the Performance Management quiz and when is the due date?
+
+4. Why would a tenant start getting rate limit 429 errors after being upgraded to a higher tier?
+
+5. What is the recommended two-stage process for rotating signing credentials for GPU image pipelines?
+
+=== 语义匹配 (Semantic) ===
+
+6. How does the company handle incident triage when something goes wrong?
+
+7. What's the onboarding process for new employees joining the engineering team?
+
+8. How are GPU resources allocated and what policies govern their usage?
+
+9. What security measures protect customer data in the platform?
+
+10. How does the company decide which features to build next?
+
+=== 跨文档推理 (Multi-Hop) ===
+
+11. Compare the self-service signup flow with the enterprise onboarding process — what are the key differences in time and steps?
+
+12. What security certifications does the company hold for SOC2, and how do they relate to the customer evidence request procedures?
+
+13. How do SLO definitions for streaming endpoints differ from batch inference endpoints in terms of metrics and alerting?
+
+=== 信息不存在的识别 ===
+
+14. What is the company's policy on cryptocurrency payment acceptance?
+
+15. Does the company have any offices in Japan, and if so, what is the headcount?
+
+================================================================
+  使用说明:
+  - 问题 1-5: 简单问题（单文档直接命中）
+  - 问题 6-10: 语义匹配（需要理解同义词和上下文）
+  - 问题 11-13: 多跳推理（需要综合多个文档的信息）
+  - 问题 14-15: 信息不存在（应触发 "信息不足" 声明）
+  - 建议 Top-K=10, Temperature=0.0
+================================================================

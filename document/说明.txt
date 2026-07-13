@@ -1,0 +1,214 @@
+==============================================================================
+  Agentic RAG 企业知识库系统 — 项目说明 (v0.8)
+==============================================================================
+
+一、项目概述
+------------------------------------------------------------------------------
+基于 LangGraph 的 Agentic RAG（检索增强生成）系统，面向企业级文档库的
+智能问答。当前版本 v0.8，历经 8 个版本的迭代，从 MVP 验证走到了具备
+多格式文档处理、GPU 加速、企业安全能力的生产级原型。
+
+数据集：EnterpriseRAG-Bench（15,001 个文件，60,818 chunks），模拟科技
+公司"Redwood Inference"的内部文档（Wiki/PR/工单/合规/技术文档等）。
+
+GitHub: https://github.com/nobailan/AgenticRAG
+
+
+二、版本演进
+------------------------------------------------------------------------------
+
+v0.1-v0.3  │ PMF 验证：基础 RAG + Gradio UI + CLI
+v0.4       │ 质量提升：Cross-encoder 精排 + 语义缓存 + 模块化 + Docker
+v0.5       │ 生产化：两级缓存 + 回归测试/CI + 多 Agent 架构
+v0.6       │ 体验优化：多轮对话 + 答案溯源 + 暗色 UI + 流式重构
+v0.7       │ 安全加固：RBAC + 审计日志 + PII 脱敏 + LLM 多供应商 fallback + Redis 分布式限流
+v0.8       │ 数据升级：多格式提取 + 版面分析 + BLIP-2 Captioning + 自适应分块 + GPU 全链路
+
+
+三、核心架构（8 节点 LangGraph 工作流）
+------------------------------------------------------------------------------
+
+  START → classify_intent（意图分类）
+    ├─ unclear  → ask_clarification → END
+    ├─ simple   → retrieve → rerank → check_sufficiency
+    └─ multi_hop → plan_sub_questions → retrieve → rerank → check_sufficiency
+
+  check_sufficiency:
+    ├─ 充分 → generate_answer → END
+    ├─ 不足 + retry<3 → refine_query → retrieve（重试）
+    └─ 不足 + retry=3 → generate_answer（强制，附声明）
+
+
+四、关键技术特性
+------------------------------------------------------------------------------
+
+4.1 混合检索 + 精排
+  - FAISS 稠密向量 (bge-base-en-v1.5, 768维) + BM25 稀疏检索
+  - RRF 融合 (k=60) → Cross-encoder (bge-reranker-base) 精排
+  - 粗排 20 篇 → 精排保留 top-5
+
+4.2 Agent 主动决策
+  - 意图分类：自动判断 simple / multi_hop / unclear
+  - 多跳拆解：复杂问题拆为子问题链，独立检索+校验
+  - 充分性校验：LLM 自己判断检索结果够不够，不够就改写查询重试
+  - 渐进式宽松：retry0 严格 → retry1 温和 → retry2+ 自动通过
+
+4.3 两级语义缓存
+  - L1 精确缓存 (MD5, <100ms)
+  - L2 语义缓存 (FAISS 向量相似度, <200ms)
+  - 统一入口 CacheManager → L1 → L2 逐级查询
+
+4.4 企业安全 (v0.7)
+  - RBAC 权限控制 (6 角色 × 文档分类过滤, Redis 持久化)
+  - 审计日志 (JSONL + Redis 双写, 按日滚动)
+  - PII 脱敏 (mask/warn/block 三种模式)
+  - 分布式限流 (Redis Token Bucket, Lua 原子脚本)
+  - LLM 多供应商 fallback (DeepSeek → OpenAI → Anthropic)
+
+4.5 多格式数据管线 (v0.8)
+  - 支持 PDF/Word/Excel/PPT/HTML/图片/纯文本 7 种格式
+  - PDF 版面分析 (Detectron2, 多栏/图文混排/表格识别)
+  - 图片 Captioning (BLIP-2 2.7B, GPU fp16)
+  - 四层清洗 (格式→结构→内容→语义)
+  - 自适应分块 (5 种文档类型策略 + Sentence Window 小2大)
+  - GPU 全链路加速 (CUDA 12.4, RTX 3060)
+
+4.6 评测体系
+  - 黄金测试集 30 题 + 自动化回归测试 + GitHub Actions CI
+  - RAGAS 三指标 (Faithfulness / AnswerRelevancy / ContextRelevancy)
+  - 基线对比 + 退化检测 (阈值 5%)
+
+
+五、项目结构
+------------------------------------------------------------------------------
+
+AgenticRAG/
+├── main.py                    # CLI 入口 (REPL / 单条 / 批处理)
+├── app_gradio.py              # Gradio Web UI (流式对话 + 推理轨迹)
+├── test_e2e.py                # 端到端测试
+├── Dockerfile                 # Docker 镜像
+├── docker-compose.yml         # 一键部署 (app + Redis)
+├── requirements.txt           # Python 依赖
+├── CHANGELOG.md               # 版本日志
+│
+├── src/
+│   ├── core/                  # 基础层
+│   │   ├── config.py          #   全局配置 (RAG_* 环境变量)
+│   │   ├── env_loader.py      #   环境变量加载
+│   │   └── models.py          #   数据模型 (RetrievedChunk, RAGState)
+│   ├── llm/                   # LLM 调用层
+│   │   ├── llm_client.py      #   OpenAI/DeepSeek/Anthropic API
+│   │   └── provider_fallback.py # 多供应商 fallback
+│   ├── retrieval/             # 检索层
+│   │   ├── retriever.py       #   HybridRetriever (FAISS + BM25 + RRF)
+│   │   └── reranker.py        #   CrossEncoderReranker 精排
+│   ├── agents/                # Agent 层
+│   │   ├── workflow.py        #   LangGraph 8节点 + 流式
+│   │   ├── supervisor.py      #   多Agent 调度器
+│   │   └── workers/           #   Worker 节点 (retriever/critic/synthesizer)
+│   ├── cache/                 # 缓存层
+│   │   ├── cache_manager.py   #   两级缓存统一入口
+│   │   ├── exact_cache.py     #   L1 精确缓存
+│   │   ├── semantic_cache.py  #   L2 语义缓存
+│   │   └── redis_client.py    #   Redis 连接
+│   ├── security/              # 安全层
+│   │   ├── auth.py            #   RBAC 权限
+│   │   ├── audit.py           #   审计日志
+│   │   ├── pii_detector.py    #   PII 脱敏
+│   │   └── health.py          #   健康检查 + 限流
+│   ├── data/                  # 数据管线
+│   │   ├── pipeline.py        #   总调度器
+│   │   ├── extractors/        #   多格式提取器
+│   │   ├── cleaners/          #   清洗管线
+│   │   └── chunkers/          #   自适应分块
+│   └── web/                   # Web UI
+├── evaluation/                # 评测体系
+│   ├── golden_testset.json    #   黄金测试集 (30题)
+│   ├── regression_test.py     #   回归测试
+│   └── baseline_metrics.json  #   基线指标
+├── scripts/                   # 工具脚本
+├── picture/                   # 截图
+└── document/                  # 设计文档
+    ├── 架构图_v0.8.md         #   架构图 (Mermaid)
+    ├── 说明.txt               #   本文件
+    └── ...                    #   各版本更新文档
+
+
+六、使用方法
+------------------------------------------------------------------------------
+
+6.1 环境准备
+
+  Python 3.10+
+  CUDA 12.4+ (GPU, 推荐)
+  Redis 7 (可选, 用于缓存/限流/RBAC)
+
+  pip install -r requirements.txt
+
+  配置 API Key:
+  export DEEPSEEK_API_KEY="sk-xxx"
+  export RAG_LLM_MODEL="deepseek-v4-pro"
+
+6.2 数据准备
+
+  # 新数据集流水线
+  python -m src.data.pipeline --input ./my_docs --output data/indices/my_index
+
+  # 限制文件数（测试）
+  python -m src.data.pipeline --input ./my_docs --limit 100
+
+6.3 启动
+
+  # Web UI
+  python app_gradio.py          → http://localhost:7860
+
+  # CLI 交互
+  python main.py --interactive
+
+  # Docker 一键部署
+  docker-compose up --build
+
+6.4 测试
+
+  # 端到端测试
+  python test_e2e.py --verbose --limit 5
+
+  # 回归测试
+  python evaluation/regression_test.py
+
+
+七、配置参数速查
+------------------------------------------------------------------------------
+
+  关键配置（完整列表见 config.py）：
+
+  RAG_EMBEDDING_MODEL       嵌入模型 (默认 bge-base-en-v1.5)
+  RAG_TOP_K=5               每次检索返回数
+  RAG_MAX_RETRIES=3         每个子问题重试上限
+  RAG_RERANKER_ENABLED=true 是否启用 cross-encoder 精排
+  RAG_CACHE_ENABLED=true    是否启用两级缓存
+  RAG_RBAC_ENABLED=true     是否启用权限控制
+  RAG_AUDIT_ENABLED=true    是否记录审计日志
+  RAG_PII_MODE=mask         PII 处理模式 (mask/warn/off)
+  RAG_LLM_FALLBACK_ENABLED  LLM 多供应商 fallback
+  RAG_RATE_LIMIT_RPM=60     每分钟请求上限
+
+
+八、当前数据规模
+------------------------------------------------------------------------------
+
+  数据集│ EnterpriseRAG-Bench (15,001 文件)
+  Chunks │ 60,818
+  检索  │ FAISS 187MB · BM25 149MB · JSONL 182MB
+  GPU   │ RTX 3060 Laptop · CUDA 12.4 · PyTorch 2.5.1
+
+
+九、已知限制
+------------------------------------------------------------------------------
+
+  - 多轮对话最多 3 轮（重启丢失）
+  - 语义缓存需 Redis（无 Redis 降级内存模式）
+  - Cross-encoder 需额外安装 sentence-transformers
+  - 当前 embedding 模型为英文优化，多语言召回率可进一步提升
+  - FAISS IndexFlatIP 暴力搜索，百万级文档需迁移 IVF/HNSW
+  - 多 Agent 模式为基础版，Worker 调度为静态编排
