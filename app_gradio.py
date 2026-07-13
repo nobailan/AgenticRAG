@@ -82,13 +82,24 @@ def handle_user_message(
         The 4th value clears the input box on the first yield.
     """
     # ---- 多轮对话上下文 (v0.6) ----
-    # 从 Gradio history 中提取最近 3 轮作为对话上下文
+    # Gradio 6.x Chatbot 的 content 是 [{"text":"...","type":"text"}]
+    # 需要提取纯文本字符串再传给 conversation_history
+    def _flatten_content(content):
+        if isinstance(content, list):
+            return " ".join(
+                item.get("text", "") if isinstance(item, dict) else str(item)
+                for item in content
+            )
+        return str(content) if content else ""
+
     conversation_history = []
     if history and len(history) >= 2:
-        # history 按时间顺序排列，最后一条是当前用户消息（刚 append 的）
-        # 取之前的最多 6 条（3 轮）
-        recent = history[:-1] if len(history) > 0 else []
-        conversation_history = recent[-6:]
+        recent = history[:-1][-6:]  # 最多 3 轮（6条）
+        for msg in recent:
+            conversation_history.append({
+                "role": msg.get("role", "user"),
+                "content": _flatten_content(msg.get("content", "")),
+            })
 
     config_override = {
         "top_k": int(top_k),
