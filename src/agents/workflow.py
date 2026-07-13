@@ -1437,11 +1437,11 @@ def run_workflow_streaming(
                 yield ({"type": "node", "node": "check_sufficiency", "message": detail, "detail": detail},)
 
                 if state.information_sufficient:
+                    # route_by_sufficiency 在 check_sufficiency 内部已推进子问题
+                    # 这里只需继续循环（让 retrieve 使用已更新的 active_query）
                     if state.intent == "multi_hop":
-                        next_idx = state.current_sub_idx + 1
+                        next_idx = state.current_sub_idx
                         if next_idx < len(state.sub_questions):
-                            state.current_sub_idx = next_idx
-                            state.active_query = state.sub_questions[next_idx]
                             state.retry_count = 0
                             continue
                     break
@@ -1452,13 +1452,10 @@ def run_workflow_streaming(
                     detail = state.active_query[:60]
                     yield ({"type": "node", "node": "refine_query", "message": f"改写: {detail}...", "detail": detail},)
                 else:
-                    if state.intent == "multi_hop":
-                        next_idx = state.current_sub_idx + 1
-                        if next_idx < len(state.sub_questions):
-                            state.current_sub_idx = next_idx
-                            state.active_query = state.sub_questions[next_idx]
-                            state.retry_count = 0
-                            continue
+                    # retries exhausted: route_by_sufficiency 已推进子问题
+                    if state.intent == "multi_hop" and state.current_sub_idx < len(state.sub_questions):
+                        state.retry_count = 0
+                        continue
                     break
 
             # generate_answer（流式 token）
