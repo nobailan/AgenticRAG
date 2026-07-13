@@ -42,12 +42,12 @@ logger = logging.getLogger(__name__)
 
 CUSTOM_CSS = """
 .warning-banner {
-    background: #332b00 !important;
-    border: 1px solid #f0c040 !important;
+    background: #fff3cd !important;
+    border: 1px solid #ffc107 !important;
     padding: 10px !important;
     border-radius: 8px !important;
     margin-bottom: 10px !important;
-    color: #f0c040 !important;
+    color: #856404 !important;
 }
 .trace-box textarea {
     font-family: 'Consolas', 'Courier New', monospace !important;
@@ -374,7 +374,7 @@ if __name__ == "__main__":
     )
 
     print("=" * 60)
-    print("  Agentic RAG v0.7 — Gradio Web UI")
+    print("  Agentic RAG v0.8 — Gradio Web UI")
     print("=" * 60)
     print(f"  Embedding model: {config.embedding_model_name}")
     print(f"  LLM: {config.llm_provider}:{config.llm_model}")
@@ -432,12 +432,6 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         show_error=True,
-        theme=gr.themes.Soft(primary_hue="blue").set(  # pyright: ignore[reportPrivateImportUsage]
-            body_background_fill="#0f172a",
-            block_background_fill="#1e293b",
-            block_border_color="#334155",
-            button_primary_background_fill="#3b82f6",
-        ),
         css=CUSTOM_CSS,
     )
 
